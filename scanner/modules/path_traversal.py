@@ -3,8 +3,9 @@ from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import get_url_params, inject_url_param, fetch
+from scanner.utils.payloads import load_payloads
 
-PAYLOADS = [
+_HARDCODED = [
     "../../../../etc/passwd",
     "../../../../etc/passwd%00",
     "..%2F..%2F..%2F..%2Fetc%2Fpasswd",
@@ -13,6 +14,14 @@ PAYLOADS = [
     "../../../../windows/win.ini",
     "..%5C..%5C..%5Cwindows%5Cwin.ini",
 ]
+
+def _get_payloads() -> List[str]:
+    data = load_payloads("path_traversal")
+    if data and isinstance(data.get("payloads"), list):
+        return data["payloads"]
+    return _HARDCODED
+
+PAYLOADS = _get_payloads()
 
 UNIX_SIGNATURES = ["root:x:", "root:/root:", "/bin/bash", "/bin/sh", "daemon:x:"]
 WIN_SIGNATURES = ["[extensions]", "[fonts]", "[mci extensions]", "for 16-bit app support"]

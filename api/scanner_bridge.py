@@ -5,7 +5,7 @@ Publishes progress events to an in-memory queue consumed by WebSocket clients.
 import os
 import asyncio
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 from collections import defaultdict
 
@@ -76,6 +76,9 @@ def _run(scan_id: str, config_dict: dict):
             "findings_count": len(scan_result.findings),
         })
 
+        # SLA deadlines: critical=3d, high=7d, medium=30d, low=90d
+        _SLA_DAYS = {"critical": 3, "high": 7, "medium": 30, "low": 90}
+
         # Persist findings
         for f in scan_result.findings:
             db.add(models.Finding(
@@ -93,8 +96,14 @@ def _run(scan_id: str, config_dict: dict):
                 cvss=f.cvss,
                 confidence=f.confidence,
                 verified=f.verified,
+                false_positive_suppressed=f.false_positive_suppressed,
                 ai_analysis=f.ai_analysis,
+                ai_verdict=f.ai_verdict,
+                ai_exploitability=f.ai_exploitability,
+                ai_business_impact=f.ai_business_impact,
+                ai_attack_scenario=f.ai_attack_scenario,
                 standards=f.standards,
+                sla_deadline=datetime.now(timezone.utc) + timedelta(days=_SLA_DAYS.get(f.severity.value, 30)),
             ))
 
         for cr in scan_result.compliance_reports:

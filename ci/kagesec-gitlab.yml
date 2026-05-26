@@ -1,0 +1,29 @@
+stages:
+  - security
+
+kagesec-scan:
+  stage: security
+  image: python:3.12-slim
+  variables:
+    TARGET: ${KAGESEC_TARGET}
+    FAIL_ON: "high"
+  before_script:
+    - pip install "kagesec[browser]"
+    - playwright install chromium --with-deps
+  script:
+    - kagesec scan "$TARGET"
+        --output all
+        --fail-on "$FAIL_ON"
+        --compliance gdpr hipaa
+        --no-browser
+  artifacts:
+    when: always
+    paths:
+      - kagesec_report.json
+      - kagesec_report.md
+      - kagesec_report.pdf
+    expire_in: 30 days
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

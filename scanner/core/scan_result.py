@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict
 from urllib.parse import urlparse, urlunparse
 
 
@@ -37,6 +37,10 @@ class Finding:
     standards: List[str] = field(default_factory=list)  # ["ISO27001-8.24", "HIPAA-164.312c"]
     confidence: float = 1.0                # 0.0–1.0
     false_positive_suppressed: bool = False
+    ai_verdict: Optional[str] = None       # "true_positive" | "false_positive" | "needs_manual_review"
+    ai_exploitability: Optional[str] = None
+    ai_business_impact: Optional[str] = None
+    ai_attack_scenario: Optional[str] = None
 
 
 @dataclass

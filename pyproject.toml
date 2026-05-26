@@ -14,6 +14,7 @@ dependencies = [
     "lxml>=5.0",
     "flask>=3.0",          # test app only
     "jinja2>=3.1",         # HTML reports
+    "pyyaml>=6.0",         # payload YAML files
 ]
 
 [project.scripts]
@@ -32,4 +33,10 @@ api = [
     "celery>=5.3",
     "redis>=5.0",
     "alembic>=1.13",
+    "apscheduler>=3.10",
+]
+browser = [
+    "playwright>=1.44",
+    "pyotp>=2.9",
+    "websockets>=12.0",
 ]

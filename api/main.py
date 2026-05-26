@@ -5,15 +5,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.db import init_db
-from api.routes import scans, reports
+from api.routes import scans, reports, findings, schedules
 from api import scanner_bridge
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    scanner_bridge.set_event_loop(asyncio.get_event_loop())
+    loop = asyncio.get_event_loop()
+    scanner_bridge.set_event_loop(loop)
+    try:
+        from api.scheduler import start as start_scheduler
+        start_scheduler()
+    except ImportError:
+        pass  # apscheduler not installed
     yield
+    try:
+        from api.scheduler import stop as stop_scheduler
+        stop_scheduler()
+    except ImportError:
+        pass
 
 
 app = FastAPI(
@@ -37,6 +48,8 @@ app.add_middleware(
 
 app.include_router(scans.router)
 app.include_router(reports.router)
+app.include_router(findings.router)
+app.include_router(schedules.router)
 
 
 @app.get("/health")

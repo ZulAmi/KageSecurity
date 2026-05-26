@@ -1,0 +1,67 @@
+name: KageSec Security Scan
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target URL to scan"
+        required: true
+      fail_on:
+        description: "Fail CI if findings at this severity or above"
+        default: "high"
+        type: choice
+        options: [critical, high, medium, low]
+
+jobs:
+  security-scan:
+    name: DAST Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # for SARIF upload
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install KageSec
+        run: pip install "kagesec[browser]"
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Run KageSec scan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TARGET: ${{ inputs.target || vars.KAGESEC_TARGET || 'http://localhost:8080' }}
+          FAIL_ON: ${{ inputs.fail_on || 'high' }}
+        run: |
+          kagesec scan "$TARGET" \
+            --output all \
+            --fail-on "$FAIL_ON" \
+            --compliance gdpr hipaa \
+            --no-browser
+
+      - name: Upload JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kagesec-report-${{ github.run_id }}
+          path: |
+            kagesec_report.json
+            kagesec_report.md
+          retention-days: 30
+
+      - name: Upload PDF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kagesec-pdf-${{ github.run_id }}
+          path: kagesec_report.pdf
+          retention-days: 30
+          if-no-files-found: ignore

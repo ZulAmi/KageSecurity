@@ -1,0 +1,221 @@
+# CVE signatures for known vulnerable JS library versions.
+# Detection: scanner/modules/cve_check.py matches library+version against these entries.
+# CVSS scores sourced from NVD. Add entries here — no Python changes required.
+
+signatures:
+
+  # jQuery
+  - library: jquery
+    pattern: 'jquery[/-](\d+\.\d+\.\d+)'
+    name: jQuery
+    versions:
+      - version_regex: '^1\.[0-8]\.'
+        cves:
+          - id: CVE-2015-9251
+            cvss: 6.1
+            description: "XSS via jQuery.parseHTML when passing HTML from untrusted sources"
+          - id: CVE-2019-11358
+            cvss: 6.1
+            description: "Prototype pollution via $.extend(true, ...) deep merge"
+      - version_regex: '^1\.(9|10|11|12)\.'
+        cves:
+          - id: CVE-2019-11358
+            cvss: 6.1
+            description: "Prototype pollution via $.extend(true, ...) deep merge"
+          - id: CVE-2020-11023
+            cvss: 6.1
+            description: "XSS in jQuery.htmlPrefilter — passing HTML with event handler attributes"
+          - id: CVE-2020-11022
+            cvss: 6.1
+            description: "XSS when passing HTML containing <option> elements to jQuery methods"
+      - version_regex: '^[23]\.'
+        cves:
+          - id: CVE-2020-11023
+            cvss: 6.1
+            description: "XSS in jQuery.htmlPrefilter (affects jQuery < 3.5.0)"
+
+  # Bootstrap
+  - library: bootstrap
+    pattern: 'bootstrap[/-](\d+\.\d+\.\d+)'
+    name: Bootstrap
+    versions:
+      - version_regex: '^[12]\.'
+        cves:
+          - id: CVE-2018-14040
+            cvss: 6.1
+            description: "XSS via the collapse data-parent attribute"
+          - id: CVE-2018-14042
+            cvss: 6.1
+            description: "XSS via the data-container attribute"
+          - id: CVE-2019-8331
+            cvss: 6.1
+            description: "XSS via the tooltip and popover data-template attribute"
+      - version_regex: '^3\.'
+        cves:
+          - id: CVE-2019-8331
+            cvss: 6.1
+            description: "XSS via the tooltip and popover data-template attribute"
+          - id: CVE-2018-14040
+            cvss: 6.1
+            description: "XSS via the collapse data-parent attribute"
+
+  # Lodash
+  - library: lodash
+    pattern: 'lodash[/-](\d+\.\d+\.\d+)'
+    name: Lodash
+    versions:
+      - version_regex: '^[0-3]\.'
+        cves:
+          - id: CVE-2019-10744
+            cvss: 9.1
+            description: "Prototype pollution via defaultsDeep, merge, mergeWith functions"
+          - id: CVE-2020-8203
+            cvss: 7.4
+            description: "Prototype pollution via zipObjectDeep"
+          - id: CVE-2021-23337
+            cvss: 7.2
+            description: "Command injection via template function"
+      - version_regex: '^4\.(0|1[0-6])\.'
+        cves:
+          - id: CVE-2019-10744
+            cvss: 9.1
+            description: "Prototype pollution via defaultsDeep, merge, mergeWith"
+          - id: CVE-2020-8203
+            cvss: 7.4
+            description: "Prototype pollution via zipObjectDeep"
+
+  # Moment.js
+  - library: moment
+    pattern: 'moment[/-](\d+\.\d+\.\d+)'
+    name: Moment.js
+    versions:
+      - version_regex: '^[0-1]\.'
+        cves:
+          - id: CVE-2017-18214
+            cvss: 7.5
+            description: "ReDoS via crafted locale string in updateOffset"
+          - id: CVE-2022-24785
+            cvss: 7.5
+            description: "Path traversal in moment.locale"
+      - version_regex: '^2\.(0|1[0-9])\.'
+        cves:
+          - id: CVE-2017-18214
+            cvss: 7.5
+            description: "ReDoS via crafted locale string"
+
+  # Angular (AngularJS 1.x)
+  - library: angular
+    pattern: 'angular[/-](\d+\.\d+\.\d+)'
+    name: AngularJS
+    versions:
+      - version_regex: '^1\.[0-5]\.'
+        cves:
+          - id: CVE-2019-14863
+            cvss: 6.1
+            description: "XSS via $sanitize service bypass in older versions"
+      - version_regex: '^1\.'
+        cves:
+          - id: CVE-2022-25869
+            cvss: 6.1
+            description: "XSS through server-side template injection in AngularJS"
+
+  # Vue.js
+  - library: vue
+    pattern: 'vue[/-](\d+\.\d+\.\d+)'
+    name: Vue.js
+    versions:
+      - version_regex: '^2\.(0|[1-5])\.'
+        cves:
+          - id: CVE-2021-41184
+            cvss: 6.1
+            description: "XSS via Server-Side Template Injection in v-html without sanitization"
+
+  # Handlebars
+  - library: handlebars
+    pattern: 'handlebars[/-](\d+\.\d+\.\d+)'
+    name: Handlebars
+    versions:
+      - version_regex: '^[0-3]\.'
+        cves:
+          - id: CVE-2019-19919
+            cvss: 9.8
+            description: "Prototype pollution via crafted template and helpers"
+          - id: CVE-2021-23369
+            cvss: 9.8
+            description: "Remote code execution via crafted template compilation"
+      - version_regex: '^4\.(0|[0-6])\.'
+        cves:
+          - id: CVE-2019-19919
+            cvss: 9.8
+            description: "Prototype pollution via crafted template"
+
+  # Underscore.js
+  - library: underscore
+    pattern: 'underscore[/-](\d+\.\d+\.\d+)'
+    name: Underscore.js
+    versions:
+      - version_regex: '^1\.(0|[1-7])\.'
+        cves:
+          - id: CVE-2021-23358
+            cvss: 7.2
+            description: "Arbitrary code execution via _.template with variable option"
+
+  # Prototype.js
+  - library: prototype
+    pattern: 'prototype[/-](\d+\.\d+\.\d+)'
+    name: Prototype.js
+    versions:
+      - version_regex: '^1\.'
+        cves:
+          - id: CVE-2008-7220
+            cvss: 7.5
+            description: "Multiple XSS vulnerabilities in Prototype.js"
+
+  # WordPress (detected via meta tag)
+  - library: wordpress
+    pattern: 'WordPress (\d+\.\d+)'
+    name: WordPress
+    versions:
+      - version_regex: '^[1-4]\.'
+        cves:
+          - id: CVE-2022-21663
+            cvss: 7.2
+            description: "Object injection via deserialization in older WordPress core"
+          - id: CVE-2021-29447
+            cvss: 7.1
+            description: "XXE injection via crafted WAV file upload"
+      - version_regex: '^5\.[0-7]'
+        cves:
+          - id: CVE-2022-21663
+            cvss: 7.2
+            description: "Object injection vulnerability in WordPress core"
+
+  # Drupal
+  - library: drupal
+    pattern: 'Drupal (\d+)'
+    name: Drupal
+    versions:
+      - version_regex: '^[67]$'
+        cves:
+          - id: CVE-2018-7600
+            cvss: 9.8
+            description: "Drupalgeddon2: Remote code execution via form API"
+          - id: CVE-2018-7602
+            cvss: 9.8
+            description: "Remote code execution via AJAX form rendering"
+      - version_regex: '^8$'
+        cves:
+          - id: CVE-2019-6340
+            cvss: 9.8
+            description: "Remote code execution via REST API — Drupal core"
+
+  # React (mostly low risk — flag for awareness)
+  - library: react
+    pattern: 'react[/-](\d+\.\d+\.\d+)'
+    name: React
+    versions:
+      - version_regex: '^0\.'
+        cves:
+          - id: CVE-2018-6341
+            cvss: 6.1
+            description: "XSS via dangerouslySetInnerHTML with untrusted content in React < 16.0"

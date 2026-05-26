@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
@@ -31,8 +31,19 @@ class FindingOut(BaseModel):
     cvss: Optional[float]
     confidence: float
     verified: bool
+    false_positive_suppressed: bool
     ai_analysis: Optional[str]
+    ai_verdict: Optional[str]
+    ai_exploitability: Optional[str]
+    ai_business_impact: Optional[str]
+    ai_attack_scenario: Optional[str]
     standards: List[str]
+    triage_status: str = "open"
+    assigned_to: Optional[str] = None
+    sla_deadline: Optional[datetime] = None
+    fixed_at: Optional[datetime] = None
+    fix_verified: bool = False
+    notes: str = ""
 
     model_config = {"from_attributes": True}
 

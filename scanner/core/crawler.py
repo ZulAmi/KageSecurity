@@ -16,6 +16,9 @@ class CrawlResult:
     body: str
     forms: List[dict] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
+    screenshot: Optional[bytes] = None          # PNG screenshot (Playwright only)
+    network_requests: List[str] = field(default_factory=list)  # XHR/fetch URLs (Playwright only)
+    websocket_connections: List[dict] = field(default_factory=list)  # WS connections (Playwright only)
 
 
 def _normalise_for_dedup(url: str) -> str:
