@@ -1,10 +1,52 @@
-.env
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
 build/
 .venv/
-node_modules/
+venv/
+*.pyo
+*.pyd
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Reports / scan output
+reports/
 kagesec_report.json
 kagesec_report.md
+*.json.report
+
+# pytest
+.pytest_cache/
+
+# Next.js
+dashboard/.next/
+dashboard/node_modules/
+dashboard/.env.local
+dashboard/.env.*.local
+dashboard/tsconfig.tsbuildinfo
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
