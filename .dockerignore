@@ -1,0 +1,10 @@
+dashboard/
+tests/
+*.db
+*.json
+reports/
+__pycache__/
+.git/
+*.pyc
+*.pyo
+.env
