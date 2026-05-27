@@ -1,0 +1,31 @@
+id: exposed-phpmyadmin
+info:
+  name: phpMyAdmin Panel Exposed
+  severity: high
+  cvss: 7.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [phpmyadmin, database, exposure, panel]
+  description: >
+    A phpMyAdmin database administration panel is publicly accessible without network
+    restriction. Exposed database admin panels are a high-value target for brute-force
+    attacks and may contain known authentication bypass vulnerabilities.
+  remediation: Restrict access to phpMyAdmin via IP allowlist or move behind a VPN. Never expose it to the internet.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/phpmyadmin/"
+      - "{{BaseURL}}/pma/"
+      - "{{BaseURL}}/phpMyAdmin/"
+      - "{{BaseURL}}/db/phpmyadmin/"
+      - "{{BaseURL}}/dbadmin/"
+      - "{{BaseURL}}/mysql/"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "phpMyAdmin"
+      - type: status
+        status: [200]

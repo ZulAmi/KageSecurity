@@ -18,7 +18,18 @@ def main():
     scan_cmd.add_argument("target", help="Target URL (e.g. https://example.com)")
     scan_cmd.add_argument("--depth", type=int, default=3, help="Crawl depth (default: 3)")
     scan_cmd.add_argument("--max-pages", type=int, default=100, help="Max pages to crawl")
-    scan_cmd.add_argument("--output", choices=["json", "markdown", "pdf", "all"], default="json")
+    scan_cmd.add_argument(
+        "--output",
+        choices=["json", "markdown", "pdf", "all"],
+        default="json",
+        help=(
+            "Report format(s) to generate. "
+            "'json' — machine-readable (default); "
+            "'markdown' — human-readable text report; "
+            "'pdf' — professional PDF report (requires: pip install playwright jinja2 && playwright install chromium); "
+            "'all' — generate all three formats."
+        ),
+    )
     scan_cmd.add_argument("--no-ai", action="store_true", help="Skip AI verification")
     scan_cmd.add_argument(
         "--compliance", nargs="+",
@@ -57,11 +68,31 @@ def main():
     scan_cmd.add_argument("--graphql", metavar="URL", help="GraphQL endpoint URL")
     scan_cmd.add_argument("--resume", metavar="SCAN_ID", help="Resume an interrupted scan (uses checkpoint from /tmp/kagesec_SCAN_ID.json)")
     scan_cmd.add_argument("--nvd-api-key", metavar="KEY", help="NVD API key for CVE enrichment (cve_check module)")
+    scan_cmd.add_argument(
+        "--templates", nargs="+", metavar="DIR",
+        help="Extra directories of YAML templates to load (in addition to built-in templates)"
+    )
+    scan_cmd.add_argument(
+        "--skip-templates", action="store_true",
+        help="Disable built-in YAML template scanning (CVEs, exposed panels, misconfigs)"
+    )
+
+    # update-templates subcommand
+    update_cmd = sub.add_parser("update-templates", help="Download the latest community templates from GitHub")
+    update_cmd.add_argument(
+        "--dir", metavar="PATH",
+        default=os.path.join(os.path.dirname(__file__), "..", "scanner", "templates", "community"),
+        help="Directory to save downloaded templates (default: scanner/templates/community/)"
+    )
 
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
+        sys.exit(0)
+
+    if args.command == "update-templates":
+        _update_templates(args.dir)
         sys.exit(0)
 
     # Build auth config
@@ -85,11 +116,20 @@ def main():
             totp_secret=args.login_totp_secret,
         )
 
+    # Handle --skip-templates: patch modules list to exclude templates module
+    modules = list(args.modules) if args.modules else None
+    if getattr(args, "skip_templates", False):
+        if modules is None:
+            from scanner.core.engine import ALL_MODULES
+            modules = [m.__name__.split(".")[-1] for m in ALL_MODULES if m.__name__.split(".")[-1] != "templates"]
+        else:
+            modules = [m for m in modules if m != "templates"]
+
     config = ScanConfig(
         target=args.target,
         max_depth=args.depth,
         max_pages=args.max_pages,
-        modules=args.modules,
+        modules=modules,
         auth=auth,
         compliance=args.compliance or [],
         browser=args.browser,
@@ -98,6 +138,7 @@ def main():
         graphql_endpoint=args.graphql,
         resume_scan_id=args.resume,
         nvd_api_key=args.nvd_api_key,
+        template_dirs=args.templates or [],
     )
 
     import uuid as _uuid
@@ -178,7 +219,22 @@ def main():
     if args.output in ("pdf", "all"):
         try:
             from scanner.reporters.pdf_reporter import generate_pdf
-            pdf_path = generate_pdf(result, "kagesec_report.pdf")
+            _auth_type = "Unauthenticated"
+            _auth_value = "—"
+            if args.auth_bearer:
+                _auth_type = "Bearer Token"
+                _auth_value = f"{args.auth_bearer[:8]}…"
+            elif args.auth_cookie:
+                _auth_type = "Session Cookie"
+                _auth_value = args.auth_cookie.split("=")[0]
+            elif args.login_url:
+                _auth_type = "Login Flow"
+                _auth_value = args.login_url
+            pdf_path = generate_pdf(
+                result, "kagesec_report.pdf",
+                auth_type=_auth_type,
+                auth_value=_auth_value,
+            )
             print(f"[+] PDF report:      {pdf_path}")
         except RuntimeError as e:
             print(f"[!] PDF generation skipped: {e}")
@@ -191,6 +247,41 @@ def main():
             if severity_order.index(finding.severity.value) <= threshold_idx:
                 print(f"\n[!] Failing CI: {args.fail_on.upper()} or above findings detected.")
                 sys.exit(1)
+
+
+def _update_templates(dest_dir: str) -> None:
+    """Download community templates from the kagesec-templates GitHub repository."""
+    import urllib.request
+    import zipfile
+    import io
+
+    REPO = "https://github.com/kagesec/templates/archive/refs/heads/main.zip"
+    print(f"[*] Downloading community templates from {REPO}")
+    print(f"[*] Destination: {dest_dir}")
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        with urllib.request.urlopen(REPO, timeout=30) as resp:
+            data = resp.read()
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            count = 0
+            for member in zf.namelist():
+                if not member.endswith(".yaml"):
+                    continue
+                # Strip leading directory component (templates-main/...)
+                parts = member.split("/", 1)
+                rel = parts[1] if len(parts) > 1 else member
+                out_path = os.path.join(dest_dir, rel)
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with zf.open(member) as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+                count += 1
+        print(f"[+] Downloaded {count} templates to {dest_dir}")
+        print(f"[+] Use them with: kagesec scan <target> --templates {dest_dir}")
+    except Exception as e:
+        print(f"[!] Template update failed: {e}")
+        print("    The community template repository may not exist yet.")
+        print("    Contribute templates at: https://github.com/kagesec/templates")
 
 
 if __name__ == "__main__":

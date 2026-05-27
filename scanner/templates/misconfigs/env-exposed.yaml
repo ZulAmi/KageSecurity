@@ -1,0 +1,29 @@
+id: exposed-env-file
+info:
+  name: Exposed .env File
+  severity: critical
+  cvss: 9.1
+  cwe: CWE-312
+  owasp: "A02:2021"
+  tags: [dotenv, env, secrets, exposure, misconfiguration]
+  description: >
+    A .env environment file is publicly accessible. .env files typically contain database
+    connection strings, API keys, secret keys, and other credentials in plaintext.
+    Exposure of this file constitutes full application secret disclosure.
+  remediation: Block access to .env files at the web server level and move secrets to a secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.).
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/.env.local"
+      - "{{BaseURL}}/.env.production"
+      - "{{BaseURL}}/.env.backup"
+    matchers-condition: and
+    matchers:
+      - type: regex
+        part: body
+        regex:
+          - "(DB_PASSWORD|APP_KEY|SECRET_KEY|DATABASE_URL|AWS_SECRET|API_KEY)\\s*="
+      - type: status
+        status: [200]

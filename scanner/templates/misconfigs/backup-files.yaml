@@ -1,0 +1,37 @@
+id: exposed-backup-files
+info:
+  name: Exposed Backup / Archive Files
+  severity: high
+  cvss: 7.5
+  cwe: CWE-538
+  owasp: "A05:2021"
+  tags: [backup, archive, exposure, misconfiguration]
+  description: >
+    Backup or archive files are publicly accessible on the web server. These may contain
+    full application source code, database dumps, or configuration files with credentials.
+    Common extensions include .bak, .zip, .tar.gz, .sql, and .old.
+  remediation: Remove backup files from the web root. Ensure automated backups write to a location outside the document root.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/backup.zip"
+      - "{{BaseURL}}/backup.tar.gz"
+      - "{{BaseURL}}/db.sql"
+      - "{{BaseURL}}/database.sql"
+      - "{{BaseURL}}/dump.sql"
+      - "{{BaseURL}}/site.zip"
+      - "{{BaseURL}}/www.zip"
+      - "{{BaseURL}}/web.zip"
+      - "{{BaseURL}}/wp-config.php.bak"
+      - "{{BaseURL}}/config.php.bak"
+      - "{{BaseURL}}/.htpasswd"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: regex
+        part: body
+        regex:
+          - "(PK\x03\x04|\\x1f\\x8b|-- MySQL dump|-- PostgreSQL|INSERT INTO|define\\('DB_PASSWORD')"
+        negative: false

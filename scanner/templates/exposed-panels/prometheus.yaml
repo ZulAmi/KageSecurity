@@ -1,0 +1,29 @@
+id: exposed-prometheus
+info:
+  name: Prometheus Metrics Endpoint Exposed
+  severity: medium
+  cvss: 5.3
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [prometheus, monitoring, exposure, metrics]
+  description: >
+    Prometheus metrics endpoints are publicly accessible. These endpoints can expose
+    internal hostnames, IP addresses, service names, query volumes, and infrastructure
+    topology that aids an attacker in reconnaissance.
+  remediation: Restrict /metrics endpoints to internal networks only via firewall rules or reverse proxy ACLs.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/metrics"
+      - "{{BaseURL}}/prometheus/metrics"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "# HELP"
+          - "# TYPE"
+        condition: or
+      - type: status
+        status: [200]

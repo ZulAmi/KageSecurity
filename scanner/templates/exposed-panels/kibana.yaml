@@ -1,0 +1,28 @@
+id: exposed-kibana
+info:
+  name: Kibana Dashboard Exposed
+  severity: high
+  cvss: 7.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [kibana, elasticsearch, exposure, panel]
+  description: >
+    A Kibana dashboard is publicly accessible without authentication. An exposed Kibana
+    instance allows reading all data in Elasticsearch indices, which may contain
+    application logs, user data, and other sensitive information.
+  remediation: Enable Elasticsearch security features (X-Pack). Restrict Kibana access via reverse proxy with authentication.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/app/kibana"
+      - "{{BaseURL}}/kibana/app/kibana"
+      - "{{BaseURL}}/app/home"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "kibana"
+      - type: status
+        status: [200]

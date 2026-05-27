@@ -1,0 +1,36 @@
+id: exposed-jenkins
+info:
+  name: Jenkins CI/CD Dashboard Exposed
+  severity: high
+  cvss: 7.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [jenkins, cicd, exposure, panel]
+  description: >
+    A Jenkins CI/CD dashboard is publicly accessible. Unauthenticated access to Jenkins
+    allows an attacker to view build logs (which may contain secrets), trigger builds
+    with attacker-controlled input, or exploit known Jenkins CVEs.
+  remediation: Enable authentication in Jenkins → Manage Jenkins → Security. Restrict access via firewall to internal networks only.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/jenkins/"
+      - "{{BaseURL}}/"
+      - "{{BaseURL}}/jenkins/api/json"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Jenkins"
+          - "Dashboard"
+        condition: or
+      - type: word
+        part: header
+        header: x-jenkins
+        words:
+          - ""
+        negative: true
+      - type: status
+        status: [200]

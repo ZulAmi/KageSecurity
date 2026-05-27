@@ -1,0 +1,28 @@
+id: exposed-grafana
+info:
+  name: Grafana Dashboard Exposed (Possible Unauthenticated Access)
+  severity: medium
+  cvss: 6.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [grafana, monitoring, exposure, panel]
+  description: >
+    A Grafana monitoring dashboard is publicly accessible. Unauthenticated Grafana instances
+    expose metrics, infrastructure topology, and may allow data source enumeration.
+    Older versions (< 8.3.10) are vulnerable to CVE-2021-43798 (directory traversal).
+  remediation: Enable authentication. Set GF_AUTH_DISABLE_LOGIN_FORM=false. Restrict network access.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/grafana/"
+      - "{{BaseURL}}/grafana/login"
+      - "{{BaseURL}}/login"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "grafana"
+      - type: status
+        status: [200]

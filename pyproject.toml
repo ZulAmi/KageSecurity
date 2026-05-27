@@ -1,42 +1,74 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "kagesec"
 version = "0.2.0"
 description = "AI-powered web application security scanner — OWASP Top 10, HIPAA, GDPR, ISO 27001, APPI"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
+keywords = ["security", "scanner", "dast", "owasp", "penetration-testing", "appsec"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Internet :: WWW/HTTP",
+]
 dependencies = [
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
     "anthropic>=0.30",
     "lxml>=5.0",
-    "flask>=3.0",          # test app only
-    "jinja2>=3.1",         # HTML reports
-    "pyyaml>=6.0",         # payload YAML files
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zulhilmirahmat/kagesec"
+Repository = "https://github.com/zulhilmirahmat/kagesec"
+"Bug Tracker" = "https://github.com/zulhilmirahmat/kagesec/issues"
 
 [project.scripts]
 kagesec = "cli.main:main"
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-httpserver>=1.0",
-    "ruff>=0.4",
-]
-api = [
-    "fastapi>=0.111",
-    "uvicorn[standard]>=0.30",
-    "sqlalchemy>=2.0",
-    "celery>=5.3",
-    "redis>=5.0",
-    "alembic>=1.13",
-    "apscheduler>=3.10",
-]
 browser = [
     "playwright>=1.44",
     "pyotp>=2.9",
     "websockets>=12.0",
 ]
+pdf = [
+    "playwright>=1.44",
+    "jinja2>=3.1",
+]
+dns = [
+    "dnspython>=2.6",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-httpserver>=1.0",
+    "ruff>=0.4",
+    "build>=1.2",
+    "twine>=5.0",
+]
+all = [
+    "playwright>=1.44",
+    "pyotp>=2.9",
+    "websockets>=12.0",
+    "dnspython>=2.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scanner*", "cli*"]
+
+[tool.setuptools.package-data]
+"scanner" = ["**/*.yaml", "**/*.yml", "**/*.html", "**/*.css", "**/*.j2"]

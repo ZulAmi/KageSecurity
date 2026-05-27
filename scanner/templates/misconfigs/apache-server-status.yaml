@@ -1,0 +1,34 @@
+id: exposed-apache-server-status
+info:
+  name: Apache server-status / server-info Exposed
+  severity: medium
+  cvss: 5.3
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [apache, server-status, exposure, misconfiguration]
+  description: >
+    Apache's mod_status or mod_info pages are publicly accessible. server-status exposes
+    current request details including client IP addresses, request URIs (which may contain
+    session tokens or sensitive parameters), and server load metrics. server-info exposes
+    the full Apache configuration including all loaded modules and their settings.
+  remediation: >
+    Restrict access in httpd.conf:
+    <Location /server-status>
+      Require ip 127.0.0.1 ::1
+    </Location>
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/server-status"
+      - "{{BaseURL}}/server-info"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Apache Server Status"
+          - "Apache Server Information"
+        condition: or
+      - type: status
+        status: [200]

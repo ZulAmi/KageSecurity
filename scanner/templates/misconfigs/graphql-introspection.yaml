@@ -1,0 +1,32 @@
+id: graphql-introspection-enabled
+info:
+  name: GraphQL Introspection Enabled in Production
+  severity: low
+  cvss: 3.1
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [graphql, introspection, exposure, api]
+  description: >
+    GraphQL introspection is enabled, allowing any user to query the full schema —
+    all types, queries, mutations, and field names. This provides a complete API map
+    that assists in targeted attacks against GraphQL endpoints.
+  remediation: Disable introspection in production. Most GraphQL server libraries provide a configuration option (e.g., Apollo Server: introspection=false in production).
+
+requests:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/api/graphql"
+    headers:
+      Content-Type: application/json
+    body: '{"query":"{__schema{types{name}}}"}'
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "__schema"
+          - "types"
+        condition: and
+      - type: status
+        status: [200]

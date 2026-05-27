@@ -35,3 +35,4 @@ class ScanConfig:
     graphql_endpoint: Optional[str] = None  # Explicit GraphQL endpoint URL
     resume_scan_id: Optional[str] = None    # Resume an interrupted scan by its checkpoint ID
     nvd_api_key: Optional[str] = None       # NVD API key for CVE enrichment (cve_check module)
+    template_dirs: Optional[List[str]] = None  # Extra directories to load YAML templates from

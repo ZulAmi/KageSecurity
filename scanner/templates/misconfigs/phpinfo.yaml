@@ -1,0 +1,31 @@
+id: exposed-phpinfo
+info:
+  name: phpinfo() Page Exposed
+  severity: medium
+  cvss: 5.3
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [php, phpinfo, exposure, misconfiguration]
+  description: >
+    A phpinfo() page is publicly accessible. This page discloses the PHP version,
+    all installed extensions, server environment variables (including database passwords,
+    API keys, and internal hostnames), file system paths, and PHP configuration values.
+  remediation: Remove phpinfo.php from the web root. Never deploy diagnostic files to production servers.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/phpinfo.php"
+      - "{{BaseURL}}/info.php"
+      - "{{BaseURL}}/php_info.php"
+      - "{{BaseURL}}/phpi.php"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "PHP Version"
+          - "phpinfo()"
+        condition: or
+      - type: status
+        status: [200]

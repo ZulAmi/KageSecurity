@@ -1,0 +1,34 @@
+id: exposed-spring-actuator
+info:
+  name: Spring Boot Actuator Endpoints Exposed
+  severity: high
+  cvss: 7.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [spring, actuator, java, exposure]
+  description: >
+    Spring Boot Actuator management endpoints are publicly accessible. These endpoints
+    expose application internals including environment variables (which may contain secrets),
+    thread dumps, heap dumps, bean definitions, and HTTP trace logs. The /env endpoint
+    in particular can leak database passwords and API keys.
+  remediation: >
+    Restrict Actuator endpoints to internal networks only. Set management.server.port to
+    an internal port. In application.yml: management.endpoints.web.exposure.include=health,info
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator"
+      - "{{BaseURL}}/actuator/env"
+      - "{{BaseURL}}/actuator/health"
+      - "{{BaseURL}}/manage/actuator"
+      - "{{BaseURL}}/actuator/mappings"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "_links"
+        condition: or
+      - type: status
+        status: [200]

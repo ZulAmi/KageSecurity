@@ -1,0 +1,29 @@
+id: exposed-laravel-telescope
+info:
+  name: Laravel Telescope Debug Panel Exposed
+  severity: high
+  cvss: 7.5
+  cwe: CWE-200
+  owasp: "A05:2021"
+  tags: [laravel, telescope, php, exposure, debug]
+  description: >
+    Laravel Telescope is publicly accessible. Telescope provides a debug UI that exposes
+    every request, database query, queued job, mail message, scheduled task, exception,
+    and dump — including values of sensitive parameters such as passwords and tokens.
+  remediation: Restrict Telescope via IP allowlist in config/telescope.php using the gate() method. Disable in production.
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/telescope"
+      - "{{BaseURL}}/telescope/requests"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "telescope"
+          - "Laravel Telescope"
+        condition: or
+      - type: status
+        status: [200]
