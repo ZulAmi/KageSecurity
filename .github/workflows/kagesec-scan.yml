@@ -1,0 +1,41 @@
+name: KageSec DAST Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target URL to scan
+        required: true
+
+jobs:
+  dast-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload SARIF to GitHub Security tab
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run KageSec DAST Scan
+        uses: ./                           # use action.yml from this repo
+        # Or pin a release: uses: kagesec/kagesec@v1
+        with:
+          target: ${{ github.event.inputs.target || vars.STAGING_URL }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          output: sarif
+          fail-on: high
+          depth: "3"
+          max-pages: "50"
+          exclude: "*/logout* *.css *.js *.png *.jpg"
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: kagesec_report.sarif
+          category: kagesec-dast

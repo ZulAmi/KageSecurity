@@ -1,3 +1,4 @@
+import fnmatch
 import httpx
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from bs4 import BeautifulSoup
@@ -36,6 +37,8 @@ class Crawler:
         self.max_pages = max_pages
         self.config = config
         self.visited: Set[str] = set()
+        self._include = list(config.include_patterns) if config and config.include_patterns else []
+        self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
 
         headers = {"User-Agent": "KageSec/0.1 Security Scanner"}
         cookies = {}
@@ -108,6 +111,13 @@ class Crawler:
         for link in links:
             self._crawl_page(link, depth + 1, results)
 
+    def _in_scope(self, url: str) -> bool:
+        if self._include and not any(fnmatch.fnmatch(url, p) for p in self._include):
+            return False
+        if self._exclude and any(fnmatch.fnmatch(url, p) for p in self._exclude):
+            return False
+        return True
+
     def _extract_links(self, soup: BeautifulSoup, base: str) -> List[str]:
         links = []
         for tag in soup.find_all("a", href=True):
@@ -115,7 +125,11 @@ class Crawler:
             parsed = urlparse(href)
             # Same domain only; strip fragments
             clean = urlunparse(parsed._replace(fragment=""))
-            if parsed.netloc == self.base_domain and _normalise_for_dedup(clean) not in self.visited:
+            if (
+                parsed.netloc == self.base_domain
+                and _normalise_for_dedup(clean) not in self.visited
+                and self._in_scope(clean)
+            ):
                 links.append(clean)
         return links
 

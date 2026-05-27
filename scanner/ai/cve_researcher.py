@@ -1,23 +1,22 @@
 """
-AI-powered CVE researcher.
+AI-powered template generator.
 
-Design philosophy:
-  KageSec has Claude — it can reason about what to check rather than brute-forcing
-  thousands of templates against every page. The workflow is:
+Design:
+  Claude IS the template library. Given a fingerprinted tech stack, it generates
+  targeted YAML templates — CVEs, misconfigs, exposed panels, version-specific
+  checks — for exactly what was detected on the target.
 
-  1. Fingerprint the target's tech stack from headers and body across all pages.
-  2. Check the local cache (~/.kagesec/cve_cache/) for this exact stack fingerprint.
-     Cache hit → skip Claude entirely, reuse the cached CVE list (30-day TTL).
-  3. Cache miss → ask Claude for the 10 most relevant CVEs for this specific stack.
-     Save the response to cache. Total payload: ~5-10KB per unique stack, not gigabytes.
-  4. Run only the targeted verification requests Claude returned.
-  5. Report confirmed findings.
+  Benefits over a static template library:
+  - Always current: Claude's knowledge covers recent CVEs without manual updates
+  - Precision: 20-40 relevant templates instead of 10,000 generic ones
+  - No downloads: ~5KB cached YAML per unique stack, not gigabytes
+  - Human-inspectable: cached templates are real YAML files you can read and modify
 
-  This means:
-  - First scan of "WordPress 5.8 + PHP 7.4": one Claude call, ~5KB cached.
-  - Every subsequent scan of any WordPress 5.8 site: zero Claude calls, instant.
-  - A site with a novel stack: one Claude call, cached for 30 days.
-  - No bulk downloads. No YAML sprawl. No firing 500 probes per page.
+  Cache:
+  - Location: ~/.kagesec/template_cache/{stack_hash}/
+  - TTL: 30 days per unique stack fingerprint
+  - Hit: zero Claude calls, templates loaded from disk instantly
+  - Miss: one Claude call → YAML files written to cache → used immediately
 """
 
 from __future__ import annotations
@@ -27,125 +26,165 @@ import re
 import json
 import time
 import hashlib
-from typing import Optional
 import anthropic
 
-from scanner.core.scan_result import Finding, Severity
+_CACHE_DIR = os.path.expanduser("~/.kagesec/template_cache")
+_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+_META_FILE = "_meta.json"
 
-_CACHE_DIR = os.path.expanduser("~/.kagesec/cve_cache")
-_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60   # 30 days
+_YAML_FORMAT = """
+id: <unique-kebab-case-id>
+info:
+  name: <Human-readable name>
+  severity: critical | high | medium | low | info
+  cve: CVE-YYYY-NNNNN          # omit if not a CVE
+  cvss: 9.8                    # omit if not a CVE
+  cwe: CWE-22                  # omit if unknown
+  owasp: "A06:2021"
+  tags: [tag1, tag2]
+  description: >
+    One paragraph — what the vulnerability is and what an attacker gains.
+  remediation: >
+    Specific action: version to upgrade to, config change, or header to add.
 
-_SYSTEM_PROMPT = """You are a CVE research expert and penetration tester.
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/exact/path"
+    headers:                   # omit if no special headers needed
+      X-Custom: value
+    body: null                 # omit or set POST body as a string
+    matchers-condition: and    # and | or
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body             # body | header
+        words:
+          - "signature string"
+      - type: regex
+        part: body
+        regex:
+          - "root:[x*]:0:0:"
+      - type: header
+        header: server
+        words:
+          - "Apache"
 
-Given a detected web application technology stack, identify the most critical known CVEs
-that apply to the specific versions detected. For each CVE, provide a safe, read-only
-HTTP verification request that a scanner can use to confirm the issue.
-
-Respond ONLY with a valid JSON array. No markdown, no prose. Schema:
-[
-  {
-    "cve_id": "CVE-YYYY-NNNNN",
-    "name": "Short human-readable name",
-    "severity": "critical|high|medium|low",
-    "cvss": 9.8,
-    "cwe": "CWE-22",
-    "owasp": "A06:2021",
-    "affected_component": "Software Name and vulnerable version range",
-    "description": "One sentence — what the vulnerability is and what an attacker gains.",
-    "remediation": "Specific version to upgrade to or configuration change.",
-    "verification": {
-      "method": "GET|POST",
-      "path": "/exact/path",
-      "headers": {},
-      "body": null,
-      "match_in": "body|header",
-      "match_pattern": "regex that confirms the vulnerability",
-      "confidence": 0.85
-    }
-  }
-]
-
-Rules:
-- Only include CVEs where the detected version is within the confirmed vulnerable range.
-- Limit to the top 10 most critical/high CVEs.
-- Verification must be safe and read-only (path traversal, error disclosure, version
-  fingerprint, timing oracle). Never writes, account creation, or DoS.
-- If no confident CVEs exist for this stack, return [].
+Variables usable in path / headers / body:
+  {{BaseURL}}  — https://example.com
+  {{Hostname}} — example.com
+  {{Path}}     — /current/page/path
+  {{Scheme}}   — https
+  {{Port}}     — 443
 """
 
-_SEVERITY_MAP = {
-    "critical": Severity.CRITICAL,
-    "high":     Severity.HIGH,
-    "medium":   Severity.MEDIUM,
-    "low":      Severity.LOW,
-    "info":     Severity.INFO,
-}
+_SYSTEM_PROMPT = f"""You are a security researcher generating KageSec YAML vulnerability templates.
+
+Given a detected web application technology stack, generate targeted YAML templates that check
+for known CVEs, common misconfigurations, exposed admin panels, and version-specific attack
+vectors relevant to the exact technologies and versions detected.
+
+Each template must follow this YAML schema exactly:
+{_YAML_FORMAT}
+
+Respond ONLY with a valid JSON array. No markdown, no prose. Each element:
+{{
+  "filename": "CVE-2021-44228.yaml",   // CVE ID if applicable, else descriptive name
+  "content": "<full YAML as a string>"
+}}
+
+Rules:
+- Generate 20-40 templates tailored to the detected stack. Quality over quantity.
+- Only include templates where the detected version is plausibly vulnerable.
+- Mix CVE checks, version disclosures, exposed panels, and misconfigs.
+- Verification must be safe and read-only: path traversal probes, error disclosure,
+  version fingerprints, header checks. Never account creation, writes, or DoS.
+- Matchers must be specific enough to avoid false positives.
+- If a CVE has a well-known fingerprint, include it. If not, skip it.
+- The JSON must be valid — escape quotes and newlines inside the "content" string.
+"""
 
 
 # ---------------------------------------------------------------------------
-# Cache
+# Cache helpers
 # ---------------------------------------------------------------------------
 
-def _cache_key(fingerprints: dict[str, str]) -> str:
-    """Stable hash of the sorted fingerprint dict — same stack = same key."""
+def _stack_hash(fingerprints: dict[str, str]) -> str:
     stable = json.dumps(sorted(fingerprints.items()), sort_keys=True)
     return hashlib.sha256(stable.encode()).hexdigest()[:16]
 
 
-def _cache_path(key: str) -> str:
-    os.makedirs(_CACHE_DIR, exist_ok=True)
-    return os.path.join(_CACHE_DIR, f"{key}.json")
+def _cache_dir_for(fingerprints: dict[str, str]) -> str:
+    return os.path.join(_CACHE_DIR, _stack_hash(fingerprints))
 
 
-def _read_cache(fingerprints: dict[str, str]) -> list[dict] | None:
-    path = _cache_path(_cache_key(fingerprints))
+def _cache_is_fresh(cache_dir: str) -> bool:
+    meta = os.path.join(cache_dir, _META_FILE)
     try:
-        with open(path) as f:
-            entry = json.load(f)
-        if time.time() - entry.get("ts", 0) < _CACHE_TTL_SECONDS:
-            return entry["cves"]
+        with open(meta) as f:
+            data = json.load(f)
+        return time.time() - data.get("ts", 0) < _CACHE_TTL_SECONDS
+    except Exception:
+        return False
+
+
+def _write_cache(cache_dir: str, fingerprints: dict[str, str], templates: list[dict]) -> None:
+    os.makedirs(cache_dir, exist_ok=True)
+    for item in templates:
+        fname = _safe_filename(item.get("filename", "template.yaml"))
+        path = os.path.join(cache_dir, fname)
+        try:
+            with open(path, "w") as f:
+                f.write(item["content"])
+        except Exception:
+            pass
+    meta = os.path.join(cache_dir, _META_FILE)
+    try:
+        with open(meta, "w") as f:
+            json.dump({"ts": time.time(), "stack": fingerprints, "count": len(templates)}, f)
     except Exception:
         pass
-    return None
 
 
-def _write_cache(fingerprints: dict[str, str], cves: list[dict]) -> None:
-    path = _cache_path(_cache_key(fingerprints))
-    try:
-        with open(path, "w") as f:
-            json.dump({"ts": time.time(), "stack": fingerprints, "cves": cves}, f, indent=2)
-    except Exception:
-        pass
+def _safe_filename(name: str) -> str:
+    name = re.sub(r"[^\w.\-]", "_", name)
+    if not name.endswith(".yaml"):
+        name += ".yaml"
+    return name
 
 
 # ---------------------------------------------------------------------------
-# AI research
+# Public API
 # ---------------------------------------------------------------------------
 
-def research_cves(fingerprints: dict[str, str], api_key: str) -> list[dict]:
+def generate_templates(fingerprints: dict[str, str], api_key: str) -> str | None:
     """
-    Return CVEs for this tech stack. Checks cache first; only calls Claude on a miss.
+    Return a path to a directory of YAML templates for this tech stack.
+    Uses cache if fresh; calls Claude once on a miss.
+    Returns None if generation fails.
     """
     if not fingerprints or not api_key:
-        return []
+        return None
 
-    # Cache hit — skip Claude entirely
-    cached = _read_cache(fingerprints)
-    if cached is not None:
-        return cached
+    cache_dir = _cache_dir_for(fingerprints)
 
-    # Cache miss — ask Claude
+    if _cache_is_fresh(cache_dir):
+        return cache_dir
+
+    # Cache miss — ask Claude to generate templates
     tech_summary = "\n".join(f"  - {k}: {v}" for k, v in fingerprints.items())
     prompt = (
-        f"Technology stack detected:\n{tech_summary}\n\n"
-        "Return the top CVEs for this exact stack as a JSON array."
+        f"Technology stack detected on the target:\n{tech_summary}\n\n"
+        "Generate targeted YAML templates for this exact stack. "
+        "Return a JSON array of {filename, content} objects."
     )
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=8192,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -154,118 +193,12 @@ def research_cves(fingerprints: dict[str, str], api_key: str) -> list[dict]:
             parts = raw.split("```")
             raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw
 
-        cves = json.loads(raw)
-        if isinstance(cves, list):
-            _write_cache(fingerprints, cves)   # save for next 30 days
-            return cves
-    except Exception:
-        pass
+        templates = json.loads(raw)
+        if not isinstance(templates, list) or not templates:
+            return None
 
-    return []
+        _write_cache(cache_dir, fingerprints, templates)
+        return cache_dir
 
-
-# ---------------------------------------------------------------------------
-# Verification + finding builder
-# ---------------------------------------------------------------------------
-
-def verify_and_build_findings(cve_list: list[dict], base_url: str, http_client) -> list[Finding]:
-    """Execute only the targeted verification requests Claude identified. No bulk probing."""
-    findings = []
-
-    for cve in cve_list:
-        verification = cve.get("verification", {})
-        if not verification:
-            # No verification step — report as informational fingerprint match only
-            findings.append(_make_finding(cve, base_url, None, None, confirmed=False))
-            continue
-
-        path = verification.get("path", "/")
-        url = base_url.rstrip("/") + path
-        method = verification.get("method", "GET").upper()
-        headers = verification.get("headers", {})
-        body = verification.get("body")
-        match_in = verification.get("match_in", "body")
-        match_pattern = verification.get("match_pattern", "")
-        confidence = float(verification.get("confidence", 0.5))
-
-        try:
-            resp = _make_request(http_client, method, url, headers, body)
-            if resp is None:
-                continue
-
-            status, resp_body, resp_headers = resp
-            target = (
-                resp_body if match_in == "body"
-                else " ".join(f"{k}: {v}" for k, v in resp_headers.items())
-            )
-
-            confirmed = False
-            if match_pattern:
-                try:
-                    confirmed = bool(re.search(match_pattern, target, re.IGNORECASE | re.DOTALL))
-                except re.error:
-                    confirmed = match_pattern.lower() in target.lower()
-            else:
-                confirmed = status < 400
-
-            if confirmed or confidence >= 0.7:
-                findings.append(
-                    _make_finding(cve, url, resp_body[:300] if confirmed else None, status, confirmed=confirmed)
-                )
-
-        except Exception:
-            continue
-
-    return findings
-
-
-def _make_request(client, method: str, url: str, headers: dict, body: Optional[str]):
-    try:
-        kwargs = {"headers": headers}
-        if method == "GET":
-            resp = client.get(url, **kwargs)
-        elif method == "POST":
-            resp = client.post(url, content=body, **kwargs)
-        elif method == "PUT":
-            resp = client.put(url, content=body, **kwargs)
-        elif method == "DELETE":
-            resp = client.delete(url, **kwargs)
-        else:
-            resp = client.get(url, **kwargs)
-
-        return resp.status_code, getattr(resp, "text", ""), dict(getattr(resp, "headers", {}))
     except Exception:
         return None
-
-
-def _make_finding(cve: dict, url: str, evidence_body: Optional[str], status: Optional[int], confirmed: bool) -> Finding:
-    cve_id = cve.get("cve_id", "Unknown CVE")
-    severity = _SEVERITY_MAP.get(cve.get("severity", "medium").lower(), Severity.MEDIUM)
-
-    evidence = f"AI CVE: {cve_id} — {cve.get('affected_component', 'unknown component')}"
-    if status is not None:
-        evidence += f" | HTTP {status}"
-    if evidence_body and confirmed:
-        evidence += f" | Confirmed: {evidence_body[:200]}"
-    else:
-        evidence += " (stack fingerprint match — not yet verified)"
-
-    return Finding(
-        title=f"{'[Verified] ' if confirmed else ''}CVE: {cve.get('name', cve_id)}",
-        severity=severity,
-        url=url,
-        parameter=None,
-        payload=None,
-        evidence=evidence,
-        description=(
-            f"{cve.get('description', '')} "
-            f"Affected: {cve.get('affected_component', 'detected component')}."
-        ),
-        remediation=cve.get("remediation", f"Apply the vendor patch for {cve_id}."),
-        cwe=cve.get("cwe"),
-        cvss=float(cve.get("cvss", 0.0)),
-        owasp_category=cve.get("owasp", "A06:2021"),
-        standards={"CVE": cve_id, "OWASP": cve.get("owasp", "A06:2021")},
-        confidence=0.85 if confirmed else 0.55,
-        verified=confirmed,
-    )

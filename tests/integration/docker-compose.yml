@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  # DVWA — intentionally vulnerable PHP app (SQLi, XSS, CSRF, file upload, etc.)
+  dvwa:
+    image: ghcr.io/digininja/dvwa:latest
+    ports:
+      - "4280:80"
+    environment:
+      - DB_SERVER=dvwa-db
+      - DB_PORT=3306
+      - DB_USER=dvwa
+      - DB_PASSWORD=p@ssw0rd
+      - DB_DATABASE=dvwa
+      - RECAPTCHA_PRIV_KEY=
+      - RECAPTCHA_PUB_KEY=
+      - DEFAULT_SECURITY_LEVEL=low
+    depends_on:
+      - dvwa-db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/login.php"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  dvwa-db:
+    image: mariadb:10.11
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+
+  # Juice Shop — OWASP flagship vulnerable Node.js app
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # WebGoat — OWASP Java vulnerable app
+  webgoat:
+    image: webgoat/webgoat:latest
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/WebGoat/login"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Clean nginx — should produce zero critical/high findings
+  clean-nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8888:80"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

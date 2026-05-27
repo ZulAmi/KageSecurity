@@ -72,6 +72,7 @@ def run_scan(
     config: ScanConfig | None = None,
     api_key: str | None = None,
     scan_id: str | None = None,
+    finding_callback=None,
 ) -> tuple[ScanResult, str | None]:
     if config is None:
         config = ScanConfig(target=target or "")
@@ -105,11 +106,13 @@ def run_scan(
         elif auth_type == "basic":
             headers["Authorization"] = f"Basic {auth_value}"
 
+    proxy = getattr(config, "proxy", None)
     raw_client = httpx.Client(
         follow_redirects=True,
         timeout=config.timeout,
         headers=headers,
         cookies=config.auth.get("cookies", {}) if config.auth else {},
+        **({"proxies": {"all://": proxy}} if proxy else {}),
     )
     limiter = RateLimiter(rps=getattr(config, "rate_limit_rps", 10))
     client = RateLimitedClient(raw_client, limiter)
@@ -118,6 +121,15 @@ def run_scan(
     active_modules = ALL_MODULES
     if config.modules:
         active_modules = [m for m in ALL_MODULES if m.__name__.split(".")[-1] in config.modules]
+
+    # Passive mode — observation only, no injection
+    if getattr(config, "passive", False):
+        _PASSIVE = {
+            "security_headers", "cookie_security", "cors", "tls",
+            "version_disclosure", "api_key_leak", "dnssec", "csrf",
+            "waf_detect", "breach",
+        }
+        active_modules = [m for m in active_modules if m.__name__.split(".")[-1] in _PASSIVE]
 
     # OOB server for blind injection detection
     oob = None
@@ -152,9 +164,22 @@ def run_scan(
 
         result.pages_crawled = len(pages)
 
+        # Session re-auth: filter out expired pages and optionally re-crawl them
+        reauth_needed = [p for p in pages if _reauth_if_needed(p, config, crawler, raw_client)]
+        if reauth_needed:
+            extra_pages = []
+            for p in reauth_needed:
+                try:
+                    if hasattr(crawler, "_crawl_page"):
+                        crawler._crawl_page(p.url, depth=0, results=extra_pages)
+                except Exception:
+                    pass
+            pages = [p for p in pages if p not in reauth_needed] + extra_pages
+            result.pages_crawled = len(pages)
+
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {
-                executor.submit(_run_module, module, page, client, oob): (module, page)
+                executor.submit(_run_module, module, page, client, oob, config): (module, page)
                 for page in pages
                 for module in active_modules
                 if (page.url, module.__name__) not in completed_pairs
@@ -165,6 +190,8 @@ def run_scan(
                     findings = future.result(timeout=30)
                     for f in findings:
                         result.add_finding(f)
+                        if finding_callback:
+                            finding_callback(f)
                     completed_pairs.add((page.url, module.__name__))
                     _save_checkpoint(effective_id, completed_pairs)
                 except Exception as e:
@@ -195,11 +222,69 @@ def run_scan(
     return result, report_md
 
 
-def _run_module(module, page, client, oob=None):
+def _run_module(module, page, client, oob=None, config=None):
     sig = inspect.signature(module.test)
-    if len(sig.parameters) >= 3 and oob is not None:
-        return module.test(page, client, oob)
+    params = list(sig.parameters.keys())
+
+    kwargs = {}
+    if "oob" in params and oob is not None:
+        kwargs["oob"] = oob
+    if "config" in params:
+        kwargs["config"] = config
+
+    if kwargs:
+        return module.test(page, client, **kwargs)
     return module.test(page, client)
+
+
+def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
+    """Detect session expiry (401 or redirect to login) and re-authenticate.
+
+    Returns True if re-auth was performed and the page should be revisited.
+    """
+    login_flow = getattr(config, "login_flow", None)
+    if not login_flow:
+        return False
+
+    status = getattr(page, "status_code", 200)
+    url = getattr(page, "url", "")
+
+    is_expired = (
+        status == 401
+        or (status in (301, 302, 303) and login_flow.url in url)
+        or (status == 200 and login_flow.url in url)
+    )
+
+    if not is_expired:
+        return False
+
+    # Re-authenticate via browser if BrowserCrawler is available
+    try:
+        if hasattr(crawler, "_authenticate"):
+            crawler._authenticate(login_flow)
+            return True
+    except Exception:
+        pass
+
+    # Fallback: re-fetch OAuth2 token if auth type is bearer
+    if config.auth and config.auth.get("type") == "bearer":
+        token_url = getattr(config, "_oauth2_token_url", None)
+        if token_url:
+            try:
+                import httpx as _httpx
+                resp = _httpx.post(token_url, data={
+                    "grant_type": "client_credentials",
+                    "client_id": config.auth.get("client_id", ""),
+                    "client_secret": config.auth.get("client_secret", ""),
+                }, timeout=15)
+                new_token = resp.json().get("access_token")
+                if new_token:
+                    raw_client.headers["Authorization"] = f"Bearer {new_token}"
+                    return True
+            except Exception:
+                pass
+
+    return False
 
 
 def _collect_oob_findings(oob, existing_findings):

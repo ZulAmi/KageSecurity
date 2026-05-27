@@ -49,6 +49,7 @@ Variables available in path / headers / body:
 
 from __future__ import annotations
 
+import itertools
 import os
 import re
 import yaml
@@ -87,6 +88,17 @@ class TemplateMatcher:
 
 
 @dataclass
+class TemplateExtractor:
+    name: str                          # variable name to store extracted value
+    type: str = "regex"                # regex | kval | json
+    part: str = "body"                 # body | header
+    regex: list[str] = field(default_factory=list)
+    group: int = 0                     # capture group index
+    header: str = ""                   # header name for type=kval
+    json_path: str = ""                # dot-path for type=json (e.g. "data.token")
+
+
+@dataclass
 class TemplateRequest:
     method: str
     paths: list[str]
@@ -95,6 +107,10 @@ class TemplateRequest:
     matchers_condition: str = "or"     # and | or across matchers
     matchers: list[TemplateMatcher] = field(default_factory=list)
     stop_at_first_match: bool = True
+    # Nuclei-compatible fuzzing
+    payloads: dict[str, list[str]] = field(default_factory=dict)   # {varname: [val1, val2, ...]}
+    attack: str = "batteringram"    # batteringram | pitchfork | clusterbomb
+    extractors: list[TemplateExtractor] = field(default_factory=list)
 
 
 @dataclass
@@ -111,6 +127,7 @@ class Template:
     owasp: str = "A05:2021"
     tags: list[str] = field(default_factory=list)
     source_file: str = ""
+    template_vars: dict[str, str] = field(default_factory=dict)  # Nuclei variables: block
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +165,11 @@ def _parse_template(path: str) -> Optional[Template]:
 
     requests = [_parse_request(r) for r in raw_requests]
 
+    # Nuclei-compatible variables: block — {{varname}} substitution across the template
+    template_vars: dict[str, str] = {}
+    for k, v in (data.get("variables", {}) or {}).items():
+        template_vars[f"{{{{{k}}}}}"] = str(v)
+
     return Template(
         id=data.get("id", os.path.basename(path)),
         name=info.get("name", data.get("id", "")),
@@ -161,6 +183,7 @@ def _parse_template(path: str) -> Optional[Template]:
         tags=info.get("tags", []),
         requests=requests,
         source_file=path,
+        template_vars=template_vars,
     )
 
 
@@ -172,6 +195,17 @@ def _parse_request(raw: dict) -> TemplateRequest:
     if isinstance(paths, str):
         paths = [paths]
 
+    # payloads: block — values may be inline lists or file paths (inline only for now)
+    raw_payloads = raw.get("payloads", {}) or {}
+    payloads: dict[str, list[str]] = {}
+    for var, val in raw_payloads.items():
+        if isinstance(val, list):
+            payloads[var] = [str(v) for v in val]
+        else:
+            payloads[var] = [str(val)]
+
+    extractors = [_parse_extractor(e) for e in (raw.get("extractors") or [])]
+
     return TemplateRequest(
         method=raw.get("method", "GET").upper(),
         paths=paths,
@@ -179,6 +213,21 @@ def _parse_request(raw: dict) -> TemplateRequest:
         body=raw.get("body"),
         matchers_condition=raw.get("matchers-condition", raw.get("matchers_condition", "or")).lower(),
         matchers=matchers,
+        payloads=payloads,
+        attack=raw.get("attack", "batteringram").lower(),
+        extractors=extractors,
+    )
+
+
+def _parse_extractor(raw: dict) -> TemplateExtractor:
+    return TemplateExtractor(
+        name=raw.get("name", "extracted"),
+        type=raw.get("type", "regex").lower(),
+        part=raw.get("part", "body").lower(),
+        regex=raw.get("regex", []),
+        group=int(raw.get("group", 0)),
+        header=raw.get("header", "").lower(),
+        json_path=raw.get("json", ""),
     )
 
 
@@ -218,19 +267,94 @@ def run_template(template: Template, page_url: str, client) -> list[Finding]:
         "{{Scheme}}": parsed.scheme,
     }
 
+    # Merge template-level variables (Nuclei variables: block)
+    if template.template_vars:
+        variables.update(template.template_vars)
+
     findings = []
     for req in template.requests:
         for path_tpl in req.paths:
-            url = _substitute(path_tpl, variables)
-            result = _execute_request(req, url, variables, client)
-            if result is None:
-                continue
-            resp_status, resp_body, resp_headers = result
-            if _matches(req, resp_status, resp_body, resp_headers):
-                findings.append(_make_finding(template, url, resp_status, resp_body))
-                if req.stop_at_first_match:
-                    return findings
+            # Expand fuzzing payloads if present
+            payload_combos = _expand_payloads(req)
+            for combo in payload_combos:
+                merged = {**variables, **combo}
+                url = _substitute(path_tpl, merged)
+                result = _execute_request(req, url, merged, client)
+                if result is None:
+                    continue
+                resp_status, resp_body, resp_headers = result
+
+                # Run extractors — extracted values flow into variables for subsequent requests
+                if req.extractors:
+                    extracted = _run_extractors(req.extractors, resp_status, resp_body, resp_headers)
+                    variables.update(extracted)
+
+                if _matches(req, resp_status, resp_body, resp_headers):
+                    findings.append(_make_finding(template, url, resp_status, resp_body))
+                    if req.stop_at_first_match:
+                        return findings
     return findings
+
+
+def _run_extractors(extractors: list[TemplateExtractor], status: int, body: str, headers: dict) -> dict[str, str]:
+    """Run all extractors and return {{{varname}}: value} for substitution."""
+    extracted: dict[str, str] = {}
+    for ext in extractors:
+        value = _extract_one(ext, status, body, headers)
+        if value is not None:
+            extracted[f"{{{{{ext.name}}}}}"] = value
+    return extracted
+
+
+def _extract_one(ext: TemplateExtractor, status: int, body: str, headers: dict) -> Optional[str]:
+    if ext.type == "regex":
+        target = _get_part(ext.part, ext.header, status, body, headers)
+        for pattern in ext.regex:
+            m = re.search(pattern, target, re.IGNORECASE | re.DOTALL)
+            if m:
+                try:
+                    return m.group(ext.group)
+                except IndexError:
+                    return m.group(0)
+        return None
+
+    if ext.type == "kval":
+        name = ext.header or ext.name
+        return headers.get(name, headers.get(name.lower())) or None
+
+    if ext.type == "json":
+        try:
+            import json as _json
+            data = _json.loads(body)
+            for key in ext.json_path.split("."):
+                data = data[key]
+            return str(data)
+        except Exception:
+            return None
+
+    return None
+
+
+def _expand_payloads(req: TemplateRequest) -> list[dict[str, str]]:
+    """Return list of variable dicts to substitute per request iteration."""
+    if not req.payloads:
+        return [{}]  # single pass, no extra vars
+
+    keys = list(req.payloads.keys())
+    lists = [req.payloads[k] for k in keys]
+
+    if req.attack == "clusterbomb":
+        # cartesian product of all wordlists
+        combos = list(itertools.product(*lists))
+    elif req.attack == "pitchfork":
+        # zip (shortest wins)
+        combos = list(zip(*lists))
+    else:
+        # batteringram — same position across all lists (cycle shorter ones)
+        max_len = max(len(l) for l in lists)
+        combos = [tuple(l[i % len(l)] for l in lists) for i in range(max_len)]
+
+    return [{f"{{{{{k}}}}}": v for k, v in zip(keys, combo)} for combo in combos]
 
 
 def _execute_request(req: TemplateRequest, url: str, variables: dict, client):

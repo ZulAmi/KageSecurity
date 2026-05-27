@@ -1,15 +1,19 @@
 """
-AI-powered CVE detection module.
+AI-powered template generation module.
 
 Phase 1 (per-page): Collect technology fingerprints from HTTP headers and body.
-Phase 2 (once per unique stack): Ask Claude to identify CVEs, then verify them.
+Phase 2 (once per target): Ask Claude to generate YAML templates for the detected
+stack, then run them through the standard template runner.
 
-This module is self-throttling: once it has sent the tech stack to Claude for a
-given combination of technologies, it won't query again for the same stack.
+Claude generates 20-40 targeted templates (CVEs, misconfigs, exposed panels) for
+the exact versions detected — rather than brute-forcing thousands of static templates.
+Results are cached in ~/.kagesec/template_cache/ for 30 days per unique stack.
+
+API key is read from config.api_key at scan time — never from the environment at
+import time. Global state is keyed by config.target so concurrent scans stay isolated.
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import List
 from urllib.parse import urlparse
@@ -17,29 +21,28 @@ from urllib.parse import urlparse
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding
 
-# Module-level state: fingerprints collected across all pages
-_fingerprints: dict[str, str] = {}
-_queried_stacks: set[str] = set()
-_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+_state: dict[str, dict] = {}
 
-# Version extraction patterns: (friendly_name, header_or_body_pattern, group_index)
+_SKIP_EXTENSIONS = (
+    ".css", ".js", ".png", ".jpg", ".svg", ".woff", ".ico", ".ttf", ".map",
+)
+
 _HEADER_FINGERPRINTS = [
-    ("Web Server",            "server",                    None),   # raw header value
-    ("Scripting Language",    "x-powered-by",              None),
-    ("Framework",             "x-aspnet-version",          None),
-    ("Framework",             "x-aspnetmvc-version",       None),
-    ("CDN / Proxy",           "via",                       None),
-    ("Debug Token",           "x-debug-token",             None),
+    ("Web Server",         "server"),
+    ("Scripting Language", "x-powered-by"),
+    ("ASP.NET Version",    "x-aspnet-version"),
+    ("ASP.NET MVC",        "x-aspnetmvc-version"),
+    ("CDN / Proxy",        "via"),
 ]
 
 _BODY_FINGERPRINTS = [
     ("WordPress",   re.compile(r'wp-content/(?:themes|plugins)/[^/]+/([0-9.]+)', re.IGNORECASE)),
     ("jQuery",      re.compile(r'jquery[/-]([0-9]+\.[0-9]+\.[0-9]+)(?:\.min)?\.js', re.IGNORECASE)),
-    ("React",       re.compile(r'react(?:\.development)?\.js.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
+    ("React",       re.compile(r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)".*react', re.IGNORECASE)),
     ("Angular",     re.compile(r'angular(?:\.min)?\.js.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
     ("Vue.js",      re.compile(r'vue(?:\.min)?\.js.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Bootstrap",   re.compile(r'bootstrap(?:\.min)?\.css.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("PHP version", re.compile(r'PHP/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
+    ("Bootstrap",   re.compile(r'bootstrap(?:\.min)?\.(?:css|js).*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
+    ("PHP",         re.compile(r'PHP/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
     ("Drupal",      re.compile(r'Drupal\s+([0-9]+)', re.IGNORECASE)),
     ("Django",      re.compile(r'Django/([0-9]+\.[0-9]+)', re.IGNORECASE)),
     ("Rails",       re.compile(r'Rails\s+([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
@@ -50,67 +53,75 @@ _BODY_FINGERPRINTS = [
     ("Spring Boot", re.compile(r'Spring Boot ([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
     ("Express",     re.compile(r'Express/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
     ("Next.js",     re.compile(r'Next\.js/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
+    ("Laravel",     re.compile(r'laravel[/ ]([0-9]+\.[0-9]+)', re.IGNORECASE)),
 ]
 
 
-def test(page: CrawlResult, client) -> List[Finding]:
-    global _api_key
+def _get_state(target: str) -> dict:
+    if target not in _state:
+        _state[target] = {"fingerprints": {}, "queried": False}
+    return _state[target]
 
-    # Collect fingerprints from this page
-    _collect_fingerprints(page)
 
-    # Only trigger AI research once we have meaningful fingerprints
-    # and haven't already queried this stack
-    if not _fingerprints:
+def test(page: CrawlResult, client, config=None) -> List[Finding]:
+    api_key = getattr(config, "api_key", None) if config else None
+    if not api_key:
         return []
 
-    stack_key = _stack_key()
-    if stack_key in _queried_stacks:
+    target = getattr(config, "target", page.url) if config else page.url
+    state = _get_state(target)
+
+    if any(page.url.endswith(ext) for ext in _SKIP_EXTENSIONS):
         return []
 
-    # Only query AI on the root domain page to avoid per-page API spam
+    # Phase 1: accumulate fingerprints from every page
+    _collect_fingerprints(page, state["fingerprints"])
+
+    # Phase 2: generate templates once — on the root page, after fingerprinting
+    if state["queried"]:
+        return []
+
     parsed = urlparse(page.url)
     if parsed.path not in ("", "/", "/index.html", "/index.php"):
         return []
 
-    if not _api_key:
+    if not state["fingerprints"]:
         return []
 
-    _queried_stacks.add(stack_key)
+    state["queried"] = True
 
     try:
-        from scanner.ai.cve_researcher import research_cves, verify_and_build_findings
+        from scanner.ai.cve_researcher import generate_templates
+        from scanner.core.template_runner import load_templates, run_template
+
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        cves = research_cves(dict(_fingerprints), _api_key)
-        if not cves:
+        template_dir = generate_templates(dict(state["fingerprints"]), api_key)
+        if not template_dir:
             return []
-        return verify_and_build_findings(cves, base_url, client)
+
+        templates = load_templates([template_dir])
+        findings: List[Finding] = []
+        for template in templates:
+            try:
+                results = run_template(template, base_url, client)
+                findings.extend(results)
+            except Exception:
+                pass
+        return findings
     except Exception:
         return []
 
 
-def _collect_fingerprints(page: CrawlResult) -> None:
-    # From response headers
-    for label, header_name, _ in _HEADER_FINGERPRINTS:
+def _collect_fingerprints(page: CrawlResult, fingerprints: dict) -> None:
+    for label, header_name in _HEADER_FINGERPRINTS:
         value = page.headers.get(header_name, "")
-        if value and label not in _fingerprints:
-            _fingerprints[label] = value
+        if value and label not in fingerprints:
+            fingerprints[label] = value
 
-    # From response body
-    search_targets = [page.body]
-    if page.headers.get("server"):
-        search_targets.append(page.headers["server"])
-
-    for combined in search_targets:
-        if not combined:
-            continue
-        for name, pattern in _BODY_FINGERPRINTS:
-            if name not in _fingerprints:
-                m = pattern.search(combined)
-                if m:
-                    version = m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0)
-                    _fingerprints[name] = f"{name} {version}"
-
-
-def _stack_key() -> str:
-    return "|".join(sorted(_fingerprints.values()))
+    body = page.body or ""
+    for name, pattern in _BODY_FINGERPRINTS:
+        if name not in fingerprints:
+            m = pattern.search(body)
+            if m:
+                version = m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0)
+                fingerprints[name] = f"{name} {version}"

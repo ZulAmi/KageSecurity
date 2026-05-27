@@ -1,0 +1,75 @@
+name: KageSec DAST Scanner
+description: AI-powered DAST scan — finds OWASP Top 10 vulnerabilities in your web app on every PR.
+author: KageSec
+
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  target:
+    description: Target URL to scan (e.g. https://staging.example.com)
+    required: true
+  api-key:
+    description: Anthropic API key for AI verification and CVE research
+    required: false
+    default: ""
+  depth:
+    description: Crawl depth
+    required: false
+    default: "3"
+  max-pages:
+    description: Maximum pages to crawl
+    required: false
+    default: "50"
+  output:
+    description: "Report format: json | markdown | sarif | all"
+    required: false
+    default: "sarif"
+  fail-on:
+    description: "Exit with code 1 if findings at this severity or above exist: critical | high | medium | low"
+    required: false
+    default: "high"
+  passive:
+    description: "Passive mode — no injection payloads (safe for production)"
+    required: false
+    default: "false"
+  modules:
+    description: "Space-separated list of modules to run (default: all)"
+    required: false
+    default: ""
+  exclude:
+    description: "Space-separated URL glob patterns to skip (e.g. '*/logout* *.css')"
+    required: false
+    default: ""
+  no-ai:
+    description: "Disable AI verification (faster, no API key needed)"
+    required: false
+    default: "false"
+
+outputs:
+  report-path:
+    description: Path to the generated SARIF report
+  findings-count:
+    description: Total number of findings
+
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - scan
+    - ${{ inputs.target }}
+    - --depth
+    - ${{ inputs.depth }}
+    - --max-pages
+    - ${{ inputs.max-pages }}
+    - --output
+    - ${{ inputs.output }}
+    - --fail-on
+    - ${{ inputs.fail-on }}
+  env:
+    ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+    KAGESEC_PASSIVE: ${{ inputs.passive }}
+    KAGESEC_NO_AI: ${{ inputs.no-ai }}
+    KAGESEC_MODULES: ${{ inputs.modules }}
+    KAGESEC_EXCLUDE: ${{ inputs.exclude }}

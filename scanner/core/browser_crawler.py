@@ -7,6 +7,7 @@ login flows including TOTP 2FA.
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from typing import List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
@@ -58,17 +59,22 @@ class BrowserCrawler:
         self.config = config
         self.visited: Set[str] = set()
         self._network_requests: List[str] = []
+        self._include = list(config.include_patterns) if config and config.include_patterns else []
+        self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
 
         self._pw = sync_playwright().start()
         self._browser: Browser = self._pw.chromium.launch(headless=True)
-        self._context: BrowserContext = self._browser.new_context(
-            ignore_https_errors=True,
-            user_agent=(
+        ctx_kwargs: dict = {
+            "ignore_https_errors": True,
+            "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-        )
+        }
+        if config and getattr(config, "proxy", None):
+            ctx_kwargs["proxy"] = {"server": config.proxy}
+        self._context: BrowserContext = self._browser.new_context(**ctx_kwargs)
 
         # Inject auth headers / cookies
         if config and config.auth:
@@ -227,6 +233,13 @@ class BrowserCrawler:
         finally:
             page.close()
 
+    def _in_scope(self, url: str) -> bool:
+        if self._include and not any(fnmatch.fnmatch(url, p) for p in self._include):
+            return False
+        if self._exclude and any(fnmatch.fnmatch(url, p) for p in self._exclude):
+            return False
+        return True
+
     def _extract_links(self, page: Page, base: str) -> List[str]:
         links = []
         try:
@@ -240,6 +253,7 @@ class BrowserCrawler:
                         _is_navigable(resolved)
                         and _same_origin(resolved, self.base_url)
                         and _normalise_for_dedup(resolved) not in self.visited
+                        and self._in_scope(resolved)
                     ):
                         links.append(resolved)
                 except Exception:

