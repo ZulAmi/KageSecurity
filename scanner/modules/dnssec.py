@@ -7,6 +7,10 @@ from scanner.core.scan_result import Finding, Severity
 _checked_domains: set = set()
 
 
+def reset() -> None:
+    _checked_domains.clear()
+
+
 def test(page: CrawlResult, client) -> List[Finding]:
     domain = urlparse(page.url).netloc.split(":")[0]
     if domain in _checked_domains:

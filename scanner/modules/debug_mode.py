@@ -35,10 +35,11 @@ _STACK_TRACE_PATTERNS = [
     # .NET
     re.compile(r"Server Error in '/' Application\.", re.IGNORECASE),
     re.compile(r"System\.Web\.HttpException", re.IGNORECASE),
-    re.compile(r"at System\.", re.IGNORECASE),
-    # Node.js
-    re.compile(r"Error: Cannot (GET|POST|PUT|DELETE)", re.IGNORECASE),
+    re.compile(r"at System\.\w+\.\w+.*\(.*\.cs:\d+\)", re.IGNORECASE),
+    # Node.js — match full stack frames, not the generic 404 "Cannot GET /path" message
+    # that every Express app returns for unknown routes (that would be a universal FP).
     re.compile(r"at Object\.<anonymous>\s+\(.*\.js:\d+:\d+\)", re.IGNORECASE),
+    re.compile(r"UnhandledPromiseRejectionWarning", re.IGNORECASE),
     # Generic SQL
     re.compile(r"(ORA-\d{5}|SQLSTATE\[|MySQL server has gone away|psycopg2\.)", re.IGNORECASE),
     # Debug UI frameworks

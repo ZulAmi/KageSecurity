@@ -5,6 +5,12 @@ from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.payloads import load_payloads
 
+_header_probed_hosts: set = set()
+
+
+def reset() -> None:
+    _header_probed_hosts.clear()
+
 _DEFAULT_CANARY = "kagesec-canary.invalid"
 
 _HARDCODED_URL_PARAMS = {"url", "redirect", "next", "src", "href", "image", "uri", "path", "dest", "target", "fetch", "load", "file", "link", "proxy"}
@@ -63,8 +69,12 @@ def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
             if inp["name"] and inp["name"].lower() in URL_PARAMS:
                 _test_form_param(form, inp["name"], client, findings)
 
-    # Header-based SSRF (probe with internal IPs in common forwarding headers)
-    _test_header_ssrf(page.url, client, findings)
+    # Header-based SSRF — run once per host, not per page
+    parsed_host = urlparse(page.url)
+    host_key = f"{parsed_host.scheme}://{parsed_host.netloc}"
+    if host_key not in _header_probed_hosts:
+        _header_probed_hosts.add(host_key)
+        _test_header_ssrf(page.url, client, findings)
 
     # Blind SSRF via OOB canary (DNS/HTTP callback)
     if oob:
@@ -103,9 +113,8 @@ def _test_param(original_url, parsed, params, param_name, client, findings):
             if matched:
                 findings.append(_finding(original_url, param_name, payload, label, matched))
                 return
-        elif resp.status_code == 200 and len(resp.text) > 50:
-            findings.append(_finding(original_url, param_name, payload, label, f"HTTP 200 ({len(resp.text)} bytes)"))
-            return
+        # No signature list means this is an internal/generic target — require explicit
+        # content match rather than status+length, which produces SPA false positives.
 
 
 def _test_form_param(form, param_name, client, findings):
@@ -125,6 +134,15 @@ def _test_form_param(form, param_name, client, findings):
 
 
 def _test_header_ssrf(url, client, findings):
+    # Fetch a baseline without any injected header so we can confirm the
+    # cloud-metadata signatures aren't already present in the page naturally.
+    try:
+        baseline = client.get(url, timeout=5)
+        baseline_text = baseline.text
+    except Exception:
+        baseline_text = ""
+
+    _CLOUD_SIGS = ["ami-id", "instance-id", "metadata", "iam/security-credentials"]
     internal_ips = ["127.0.0.1", "169.254.169.254", "10.0.0.1", "192.168.1.1"]
     for header in SSRF_HEADERS:
         for ip in internal_ips:
@@ -132,14 +150,20 @@ def _test_header_ssrf(url, client, findings):
                 resp = client.get(url, headers={header: ip})
             except Exception:
                 continue
-            if any(sig in resp.text for sig in ["ami-id", "instance-id", "metadata"]):
+            # Only report if a cloud-metadata signature appears after injection
+            # AND was absent from the baseline response.
+            sig = next(
+                (s for s in _CLOUD_SIGS if s in resp.text and s not in baseline_text),
+                None,
+            )
+            if sig:
                 findings.append(Finding(
                     title=f"SSRF via HTTP Header: {header}",
                     severity=Severity.HIGH,
                     url=url,
                     parameter=header,
                     payload=ip,
-                    evidence=f"Cloud metadata content returned when {header}: {ip} injected",
+                    evidence=f"Cloud metadata signature '{sig}' appeared in response after injecting {header}: {ip} (absent in baseline)",
                     description=(
                         "The server uses a forwarded IP header to make internal requests, "
                         "allowing SSRF via header injection."

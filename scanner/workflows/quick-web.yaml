@@ -1,0 +1,38 @@
+name: quick-web
+description: >
+  Fast surface scan — baseline headers/config first, then injection modules
+  only when baseline passes or flags interesting findings.
+
+steps:
+  - id: baseline
+    description: "Security headers, cookies, TLS, clickjacking, CORS"
+    modules:
+      - security_headers
+      - cookie_security
+      - tls
+      - clickjacking
+      - cors
+      - crossdomain
+      - waf_detect
+
+  - id: injection
+    description: "Core injection modules (fast)"
+    condition: always
+    modules:
+      - xss
+      - sqli
+      - cmd_injection
+      - path_traversal
+      - open_redirect
+      - ssti
+    max_pages: 30
+    depth: 2
+
+  - id: deep-injection
+    description: "Deeper injection checks when WAF or critical found"
+    condition: any_critical
+    modules:
+      - waf_bypass
+      - form_fuzz
+      - http_param_pollution
+    depth: 2

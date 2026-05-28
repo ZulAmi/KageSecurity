@@ -111,6 +111,7 @@ class TemplateRequest:
     payloads: dict[str, list[str]] = field(default_factory=dict)   # {varname: [val1, val2, ...]}
     attack: str = "batteringram"    # batteringram | pitchfork | clusterbomb
     extractors: list[TemplateExtractor] = field(default_factory=list)
+    id: Optional[str] = None          # named request block (used by flow:)
 
 
 @dataclass
@@ -128,6 +129,9 @@ class Template:
     tags: list[str] = field(default_factory=list)
     source_file: str = ""
     template_vars: dict[str, str] = field(default_factory=dict)  # Nuclei variables: block
+    flow: Optional[str] = None                                    # Nuclei flow: script
+    is_headless: bool = False                                     # True for headless: templates
+    rate_limit_rps: Optional[float] = None                       # Gap 26 — per-template rate limit
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +163,32 @@ def _parse_template(path: str) -> Optional[Template]:
     severity_str = str(info.get("severity", "info")).lower()
     severity = _SEVERITY_MAP.get(severity_str, Severity.INFO)
 
+    # Headless templates — delegate to headless_runner
+    if "headless" in data:
+        ht = _parse_headless_template(path, data, info, severity)
+        ht._headless_data = data  # type: ignore[attr-defined]
+        return ht
+
+    # Gap 15: code: templates — store raw data for code_runner
+    if "code" in data:
+        t = Template(
+            id=data.get("id", os.path.basename(path)),
+            name=info.get("name", data.get("id", "")),
+            severity=severity,
+            description=info.get("description", ""),
+            remediation=info.get("remediation", ""),
+            cve=info.get("cve") or _extract_cve(info.get("tags", [])),
+            cvss=float(info.get("cvss", 0.0)),
+            cwe=info.get("cwe"),
+            owasp=info.get("owasp", "A05:2021"),
+            tags=info.get("tags", []),
+            requests=[],
+            source_file=path,
+        )
+        object.__setattr__(t, "_code_data", data)  # type: ignore[call-arg]
+        t._code_data = data  # type: ignore[attr-defined]
+        return t
+
     raw_requests = data.get("requests", data.get("http", []))
     if not raw_requests:
         return None
@@ -169,6 +199,15 @@ def _parse_template(path: str) -> Optional[Template]:
     template_vars: dict[str, str] = {}
     for k, v in (data.get("variables", {}) or {}).items():
         template_vars[f"{{{{{k}}}}}"] = str(v)
+
+    # Gap 26 — parse rate-limit: field
+    rate_limit_rps = None
+    raw_rl = data.get("rate-limit") or data.get("rate_limit")
+    if raw_rl is not None:
+        try:
+            rate_limit_rps = float(raw_rl)
+        except (TypeError, ValueError):
+            pass
 
     return Template(
         id=data.get("id", os.path.basename(path)),
@@ -184,6 +223,8 @@ def _parse_template(path: str) -> Optional[Template]:
         requests=requests,
         source_file=path,
         template_vars=template_vars,
+        flow=data.get("flow"),
+        rate_limit_rps=rate_limit_rps,
     )
 
 
@@ -216,6 +257,7 @@ def _parse_request(raw: dict) -> TemplateRequest:
         payloads=payloads,
         attack=raw.get("attack", "batteringram").lower(),
         extractors=extractors,
+        id=raw.get("id"),
     )
 
 
@@ -272,11 +314,39 @@ def run_template(template: Template, page_url: str, client) -> list[Finding]:
         variables.update(template.template_vars)
 
     findings = []
+
+    # Headless templates use Playwright instead of httpx
+    if template.is_headless:
+        return _run_headless_template(template, base_url)
+
+    # Gap 15: code: templates — execute inline Python/shell code blocks
+    code_data = getattr(template, "_code_data", None)
+    if code_data:
+        return _run_code_template(template, page_url, client, base_url)
+
+    # If the template has a flow: script, run it after static requests complete
+    if template.flow:
+        try:
+            from scanner.core.flow_evaluator import run_flow
+            flow_results = run_flow(template.flow, template, variables, client)
+            for r in flow_results:
+                if r.get("status") and r["status"] < 400:
+                    findings.append(_make_finding(template, r["url"], r["status"], r.get("body", "")))
+        except Exception:
+            pass
+        return findings
+
+    # Gap 26 — per-template rate limit: sleep between requests
+    import time as _time
+    _rate_sleep = (1.0 / template.rate_limit_rps) if template.rate_limit_rps else 0.0
+
     for req in template.requests:
         for path_tpl in req.paths:
             # Expand fuzzing payloads if present
             payload_combos = _expand_payloads(req)
             for combo in payload_combos:
+                if _rate_sleep > 0:
+                    _time.sleep(_rate_sleep)
                 merged = {**variables, **combo}
                 url = _substitute(path_tpl, merged)
                 result = _execute_request(req, url, merged, client)
@@ -388,8 +458,9 @@ def _execute_request(req: TemplateRequest, url: str, variables: dict, client):
 
 
 def _matches(req: TemplateRequest, status: int, body: str, headers: dict) -> bool:
+    # Require explicit matchers — a status-only fallback produces SPA catch-all false positives
     if not req.matchers:
-        return status < 400
+        return False
 
     results = [_eval_matcher(m, status, body, headers) for m in req.matchers]
 
@@ -443,6 +514,125 @@ def _substitute(tpl: str, variables: dict) -> str:
     for k, v in variables.items():
         tpl = tpl.replace(k, v)
     return tpl
+
+
+def _parse_headless_template(path: str, data: dict, info: dict, severity: Severity) -> Template:
+    """Wrap a headless: YAML template as a Template with is_headless=True."""
+    template_vars: dict[str, str] = {}
+    for k, v in (data.get("variables", {}) or {}).items():
+        template_vars[f"{{{{{k}}}}}"] = str(v)
+
+    return Template(
+        id=data.get("id", os.path.basename(path)),
+        name=info.get("name", data.get("id", "")),
+        severity=severity,
+        description=info.get("description", ""),
+        remediation=info.get("remediation", ""),
+        cve=info.get("cve") or _extract_cve(info.get("tags", [])),
+        cvss=float(info.get("cvss", 0.0)),
+        cwe=info.get("cwe"),
+        owasp=info.get("owasp", "A05:2021"),
+        tags=info.get("tags", []),
+        requests=[],
+        source_file=path,
+        template_vars=template_vars,
+        flow=None,
+        is_headless=True,
+        # Stash raw headless data on the template for the runner
+        # We use a non-dataclass attribute set after init
+    )
+
+
+def _attach_headless_data(template: Template, data: dict) -> Template:
+    """Attach raw headless block to a Template object."""
+    object.__setattr__(template, "_headless_data", data)
+    return template
+
+
+def _run_headless_template(template: Template, base_url: str) -> list[Finding]:
+    """Execute a headless template using headless_runner."""
+    from scanner.core.headless_runner import parse_headless, run_headless
+
+    raw_data = getattr(template, "_headless_data", None)
+    if not raw_data:
+        return []
+
+    flat_vars = {k.strip("{}"): v for k, v in template.template_vars.items()}
+    ht = parse_headless(raw_data, flat_vars)
+    if not ht:
+        return []
+
+    result = run_headless(ht, base_url)
+
+    if not result.get("matched"):
+        return []
+
+    evidence = f"Headless template '{template.id}' matched at {result['url']}"
+    if result.get("extracted"):
+        evidence += f" | Extracted: {result['extracted']}"
+    if result.get("error"):
+        evidence += f" | Error: {result['error']}"
+
+    return [Finding(
+        title=template.name,
+        severity=template.severity,
+        url=result["url"],
+        parameter=None,
+        payload=None,
+        evidence=evidence,
+        description=template.description,
+        remediation=template.remediation,
+        cwe=template.cwe,
+        cvss=template.cvss,
+        owasp_category=template.owasp,
+        standards={"CVE": template.cve} if template.cve else {},
+        confidence=0.80,
+    )]
+
+
+def _run_code_template(template: Template, page_url: str, client, base_url: str) -> list[Finding]:
+    """Gap 15 — execute code: block templates via code_runner subprocess."""
+    from scanner.core.code_runner import parse_code_blocks, run_code_block
+
+    code_data = getattr(template, "_code_data", {})
+    blocks = parse_code_blocks(code_data)
+    if not blocks:
+        return []
+
+    # Fetch the page to provide response context
+    try:
+        resp = client.get(page_url, timeout=10)
+        resp_body = resp.text
+        resp_status = resp.status_code
+        resp_headers = dict(resp.headers)
+    except Exception:
+        resp_body, resp_status, resp_headers = "", 0, {}
+
+    findings = []
+    for block in blocks:
+        result = run_code_block(
+            block, page_url, resp_body, resp_status, resp_headers
+        )
+        if result.matched:
+            findings.append(Finding(
+                title=template.name,
+                severity=template.severity,
+                url=page_url,
+                parameter=None,
+                payload=f"code:{block.engine}",
+                evidence=(
+                    f"Code template '{template.id}' matched. "
+                    f"Output: {result.output[:300]}"
+                    + (f" | Error: {result.error[:100]}" if result.error else "")
+                ),
+                description=template.description,
+                remediation=template.remediation,
+                cwe=template.cwe,
+                cvss=template.cvss,
+                owasp_category=template.owasp,
+                confidence=0.80,
+            ))
+    return findings
 
 
 def _make_finding(template: Template, url: str, status: int, body: str) -> Finding:

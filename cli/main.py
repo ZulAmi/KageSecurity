@@ -7,6 +7,7 @@ import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scanner.core.engine import run_scan
 from scanner.core.config import ScanConfig, LoginFlow
+from scanner.core import policy as _policy
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     scan_cmd.add_argument("--max-pages", type=int, default=100, help="Max pages to crawl")
     scan_cmd.add_argument(
         "--output",
-        choices=["json", "markdown", "pdf", "sarif", "all"],
+        choices=["json", "markdown", "pdf", "sarif", "burp", "zap", "all"],
         default="json",
         help=(
             "Report format(s) to generate. "
@@ -35,6 +36,8 @@ def main():
             "'markdown' — human-readable text report; "
             "'pdf' — professional PDF report (requires playwright + jinja2); "
             "'sarif' — SARIF 2.1.0 for GitHub Code Scanning / VS Code; "
+            "'burp' — Burp Suite XML issue import format; "
+            "'zap' — OWASP ZAP JSON alert format; "
             "'all' — generate all formats."
         ),
     )
@@ -63,6 +66,18 @@ def main():
         help="Passive mode — inspect headers/cookies/content only, no injection payloads (safe for production)",
     )
     scan_cmd.add_argument(
+        "--follow-robots", action="store_true",
+        help="Respect robots.txt Disallow rules during crawl (default: ignore)",
+    )
+    scan_cmd.add_argument(
+        "--no-oob", action="store_true",
+        help="Disable out-of-band callback server (use for air-gapped or rate-limited targets)",
+    )
+    scan_cmd.add_argument(
+        "--oob-server", metavar="DOMAIN", default=None,
+        help="Custom OOB callback domain (default: oast.pro)",
+    )
+    scan_cmd.add_argument(
         "--fail-on", choices=["critical", "high", "medium", "low"],
         help="Exit with code 1 if findings at this severity or above are found (CI/CD mode)",
     )
@@ -77,6 +92,14 @@ def main():
     scan_cmd.add_argument("--login-totp-secret", metavar="BASE32", help="base32 TOTP secret for 2FA")
     scan_cmd.add_argument("--openapi", metavar="URL_OR_FILE", help="OpenAPI 3.x/Swagger 2.x spec for API scanning")
     scan_cmd.add_argument("--graphql", metavar="URL", help="GraphQL endpoint URL")
+    scan_cmd.add_argument(
+        "--grpc", metavar="HOST:PORT",
+        help=(
+            "gRPC endpoint to scan via Server Reflection (e.g. api.example.com:50051). "
+            "Discovers all services/methods and fuzzes string fields for injection. "
+            "Requires: pip install grpcio grpcio-reflection protobuf"
+        ),
+    )
     scan_cmd.add_argument("--resume", metavar="SCAN_ID", help="Resume an interrupted scan")
     scan_cmd.add_argument("--nvd-api-key", metavar="KEY", help="NVD API key for CVE enrichment")
     scan_cmd.add_argument("--templates", nargs="+", metavar="DIR", help="Extra YAML template directories")
@@ -96,6 +119,147 @@ def main():
     scan_cmd.add_argument(
         "--exclude", nargs="+", metavar="PATTERN",
         help="Skip URLs matching these glob patterns (e.g. '*/logout*' '*.css' '*.js')",
+    )
+    scan_cmd.add_argument(
+        "--concurrency", type=int, default=8, metavar="N",
+        help="Number of module-threads per page (default: 8). Increase for fast targets, decrease to be polite.",
+    )
+    scan_cmd.add_argument(
+        "--rate-limit", type=int, default=10, metavar="RPS",
+        help="Maximum HTTP requests per second across the whole scan (default: 10).",
+    )
+    scan_cmd.add_argument(
+        "--har", metavar="FILE",
+        help="Import a .har file and scan all captured requests instead of crawling a live URL.",
+    )
+    scan_cmd.add_argument(
+        "--workflow", metavar="NAME_OR_FILE",
+        help=(
+            "Run a YAML workflow that chains scan steps with conditions. "
+            "Built-in: quick-web, wordpress. Custom: path to .yaml file or "
+            "name from ~/.kagesec/workflows/. "
+            "Use 'kagesec workflows' to list available workflows."
+        ),
+    )
+    scan_cmd.add_argument(
+        "--auto-update", action="store_true",
+        help="Automatically download newer Nuclei templates if available (background, non-blocking).",
+    )
+    scan_cmd.add_argument(
+        "--profile", metavar="NAME",
+        help=(
+            "Apply a named scan preset. Built-in: quick, full, api, passive, stealth. "
+            "Custom profiles in ~/.kagesec/profiles/<name>.yaml. "
+            "CLI flags override profile defaults."
+        ),
+    )
+    scan_cmd.add_argument(
+        "--wsdl", metavar="URL",
+        help="SOAP/WSDL endpoint URL — fetches WSDL, discovers operations, and probes for XXE and verbose faults.",
+    )
+    scan_cmd.add_argument("--jwt-wordlist", metavar="FILE", help="Custom JWT secrets wordlist for weak secret cracking")
+    scan_cmd.add_argument("--wordlist", metavar="FILE", help="Custom path discovery wordlist (overrides built-in)")
+    scan_cmd.add_argument("--param-wordlist", metavar="FILE", help="Custom parameter discovery wordlist")
+    scan_cmd.add_argument("--subdomain-wordlist", metavar="FILE", help="Custom subdomain enumeration wordlist")
+    scan_cmd.add_argument("--policy", metavar="FILE", help="Scan policy YAML — per-module enable/strength/timeout overrides")
+    scan_cmd.add_argument(
+        "--full", action="store_true",
+        help="Force a full scan — ignore delta state and re-scan all URLs even if unchanged since last scan",
+    )
+    scan_cmd.add_argument(
+        "--notify-slack", metavar="URL",
+        help="Slack incoming webhook URL — posts each finding above --notify-min-severity",
+    )
+    scan_cmd.add_argument(
+        "--notify-teams", metavar="URL",
+        help="Microsoft Teams incoming webhook URL",
+    )
+    scan_cmd.add_argument(
+        "--notify-discord", metavar="URL",
+        help="Discord webhook URL",
+    )
+    scan_cmd.add_argument(
+        "--notify-webhook", metavar="URL",
+        help="Generic JSON webhook URL (POST with finding payload)",
+    )
+    scan_cmd.add_argument(
+        "--notify-min-severity", metavar="LEVEL",
+        choices=["critical", "high", "medium", "low", "info"],
+        default="high",
+        help="Minimum severity to notify (default: high)",
+    )
+    scan_cmd.add_argument(
+        "--timeout", type=int, default=10, metavar="SECONDS",
+        help="Per-request HTTP timeout in seconds (default: 10)",
+    )
+    scan_cmd.add_argument(
+        "--retries", type=int, default=0, metavar="N",
+        help="Number of times to retry failed HTTP requests (default: 0)",
+    )
+    scan_cmd.add_argument(
+        "--user-agent", metavar="UA",
+        help="Custom User-Agent string (default: KageSec/1.0). Useful for WAF evasion or mobile path testing.",
+    )
+    scan_cmd.add_argument(
+        "-H", "--header", dest="custom_headers", metavar="NAME:VALUE",
+        action="append", default=[],
+        help="Add a custom HTTP header to every request (e.g. -H 'X-Api-Key: abc'). Repeatable.",
+    )
+    scan_cmd.add_argument(
+        "--max-time", type=int, default=0, metavar="MINUTES",
+        help="Hard time limit for the scan in minutes (default: 0 = unlimited). Scan stops gracefully when exceeded.",
+    )
+    scan_cmd.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Verbose output — print each URL as it is crawled and each module as it runs.",
+    )
+    scan_cmd.add_argument(
+        "--no-color", action="store_true",
+        help="Disable ANSI color codes in output (useful for log files and CI/CD pipelines).",
+    )
+    scan_cmd.add_argument(
+        "--stats", action="store_true",
+        help="Show a live progress bar on stderr while scanning (pages/modules completed, findings so far).",
+    )
+    scan_cmd.add_argument(
+        "--extensions", metavar="LIST",
+        help=(
+            "Comma-separated file extensions to append during path discovery "
+            "(e.g. '.php,.asp,.bak,.zip'). Appended to each wordlist entry."
+        ),
+    )
+    scan_cmd.add_argument(
+        "--filter-status", metavar="CODES",
+        help=(
+            "Comma-separated HTTP status codes to suppress in discovery output "
+            "(e.g. '404,301' skips these from path/param discovery findings)."
+        ),
+    )
+    scan_cmd.add_argument(
+        "--random-agent", action="store_true",
+        help="Rotate User-Agent string randomly per request from a built-in list.",
+    )
+    scan_cmd.add_argument(
+        "--cookie-jar", metavar="FILE",
+        help="Netscape-format cookie jar file — loads cookies for all scan requests.",
+    )
+    scan_cmd.add_argument(
+        "--dbms", choices=["mysql", "postgres", "mssql", "oracle", "sqlite"],
+        help="Specify the backend DBMS to tune SQLi payloads (auto-detected if omitted).",
+    )
+    scan_cmd.add_argument(
+        "--level", type=int, default=1, choices=range(1, 6), metavar="1-5",
+        help=(
+            "Scan aggressiveness level (default: 1). Higher levels add more payloads, "
+            "headers, and cookie injection. 1=safe, 3=standard, 5=maximum."
+        ),
+    )
+    scan_cmd.add_argument(
+        "--risk", type=int, default=1, choices=range(1, 4), metavar="1-3",
+        help=(
+            "Risk of side-effects (default: 1). Higher risks include time-based "
+            "and heavy-weight payloads that may affect availability. 1=low, 3=high."
+        ),
     )
 
     # ------------------------------------------------------------------ diff
@@ -125,12 +289,76 @@ def main():
     import_cmd = sub.add_parser("import-scan", help="Import a previously exported scan checkpoint")
     import_cmd.add_argument("file", help="Exported zip file to import")
 
+    # ------------------------------------------------------------------ history
+    history_cmd = sub.add_parser("history", help="Show finding trends from past scans")
+    history_cmd.add_argument("target", nargs="?", help="Filter by target URL")
+    history_cmd.add_argument("--persisting", action="store_true", help="Show only findings seen in multiple scans")
+    history_cmd.add_argument("--scans", action="store_true", help="Show scan history instead of findings")
+    history_cmd.add_argument("--limit", type=int, default=10, help="Max rows to show (default: 10)")
+
+    # ------------------------------------------------------------------ suppress
+    suppress_cmd = sub.add_parser("suppress", help="Manage false-positive suppression rules")
+    suppress_sub = suppress_cmd.add_subparsers(dest="suppress_action")
+
+    supp_add = suppress_sub.add_parser("add", help="Add a suppression rule")
+    supp_add.add_argument("--title", metavar="PATTERN", help="Suppress findings whose title contains this string")
+    supp_add.add_argument("--url-pattern", metavar="GLOB", help="fnmatch glob matching finding URL (e.g. '*/admin/*')")
+    supp_add.add_argument("--target", metavar="URL", help="Only suppress for this target (startswith match)")
+    supp_add.add_argument("--note", metavar="TEXT", help="Reason for suppression (stored for audit trail)")
+
+    suppress_sub.add_parser("list", help="List active suppression rules")
+
+    supp_rm = suppress_sub.add_parser("remove", help="Remove a suppression rule by ID")
+    supp_rm.add_argument("rule_id", help="Rule ID shown in 'suppress list'")
+
+    # ------------------------------------------------------------------ retest
+    retest_cmd = sub.add_parser("retest", help="Re-run a specific finding to verify if it still exists")
+    retest_cmd.add_argument("finding_id", help="Finding index (0-based) or 'title:substring' to match")
+    retest_cmd.add_argument("--report", metavar="FILE", default="kagesec_report.json",
+                            help="JSON report file containing the finding (default: kagesec_report.json)")
+    retest_cmd.add_argument("--api-key", metavar="KEY", help="Anthropic API key")
+    retest_cmd.add_argument("--no-ai", action="store_true", help="Skip AI verification in retest")
+
+    # ------------------------------------------------------------------ issues
+    issues_cmd = sub.add_parser("issues", help="Export findings to Jira or GitHub Issues")
+    issues_cmd.add_argument("--report", metavar="FILE", default="kagesec_report.json",
+                            help="JSON report to export (default: kagesec_report.json)")
+    issues_cmd.add_argument("--format", choices=["jira", "github"], required=True,
+                            help="Export destination")
+    issues_cmd.add_argument("--jira-url", metavar="URL", help="Jira instance base URL (e.g. https://myorg.atlassian.net)")
+    issues_cmd.add_argument("--jira-project", metavar="KEY", help="Jira project key (e.g. SEC)")
+    issues_cmd.add_argument("--jira-token", metavar="TOKEN", help="Jira API token (user:token base64 or bare token)")
+    issues_cmd.add_argument("--github-repo", metavar="OWNER/REPO", help="GitHub repository (e.g. myorg/myapp)")
+    issues_cmd.add_argument("--github-token", metavar="TOKEN", help="GitHub personal access token")
+    issues_cmd.add_argument("--dry-run", action="store_true", help="Print what would be created without creating issues")
+    issues_cmd.add_argument(
+        "--min-severity", choices=["critical", "high", "medium", "low", "info"], default="medium",
+        help="Only export findings at this severity or above (default: medium)",
+    )
+
+    # ------------------------------------------------------------------ workflows
+    sub.add_parser("workflows", help="List available scan workflows")
+
+    # ------------------------------------------------------------------ config
+    config_cmd = sub.add_parser("config", help="View or set persistent default settings (~/.kagesec/config.yaml)")
+    config_cmd.add_argument("--set", nargs=2, metavar=("KEY", "VALUE"), action="append",
+                            help="Set a config key (e.g. --set depth 5 --set output markdown)")
+    config_cmd.add_argument("--unset", nargs="+", metavar="KEY", help="Remove config key(s)")
+    config_cmd.add_argument("--show", action="store_true", help="Show current config (default action)")
+
     # ------------------------------------------------------------------ update-templates
-    update_cmd = sub.add_parser("update-templates", help="Download the latest community templates from GitHub")
+    update_cmd = sub.add_parser(
+        "update-templates",
+        help="Download Nuclei community templates (~9,500 CVE/misconfiguration templates) filtered for KageSec compatibility",
+    )
     update_cmd.add_argument(
         "--dir", metavar="PATH",
-        default=os.path.join(os.path.dirname(__file__), "..", "scanner", "templates", "community"),
-        help="Directory to save downloaded templates (default: scanner/templates/community/)",
+        default=os.path.expanduser("~/.kagesec/nuclei-templates"),
+        help="Directory to save templates (default: ~/.kagesec/nuclei-templates/)",
+    )
+    update_cmd.add_argument(
+        "--all", action="store_true",
+        help="Keep all templates including unsupported types (flow/network/dns/headless). Default: compatible only.",
     )
 
     args = parser.parse_args()
@@ -139,8 +367,39 @@ def main():
         parser.print_help()
         sys.exit(0)
 
+    if args.command == "history":
+        _run_history(args)
+        sys.exit(0)
+
+    if args.command == "suppress":
+        _run_suppress(args)
+        sys.exit(0)
+
+    if args.command == "retest":
+        _run_retest(args)
+        sys.exit(0)
+
+    if args.command == "issues":
+        _run_issues(args)
+        sys.exit(0)
+
+    if args.command == "workflows":
+        from scanner.core.workflow import list_workflows
+        names = list_workflows()
+        if names:
+            print("[+] Available workflows:")
+            for n in names:
+                print(f"    {n}")
+        else:
+            print("[*] No workflows found. Place .yaml files in ~/.kagesec/workflows/")
+        sys.exit(0)
+
+    if args.command == "config":
+        _run_config(args)
+        sys.exit(0)
+
     if args.command == "update-templates":
-        _update_templates(args.dir)
+        _update_templates(args.dir, keep_all=getattr(args, "all", False))
         sys.exit(0)
 
     if args.command == "serve":
@@ -161,8 +420,8 @@ def main():
         sys.exit(0)
 
     # ------------------------------------------------------------------ scan logic
-    if not args.target and not getattr(args, "targets", None):
-        scan_cmd.error("provide a target URL or --targets FILE")
+    if not args.target and not getattr(args, "targets", None) and not getattr(args, "har", None):
+        scan_cmd.error("provide a target URL, --targets FILE, or --har FILE")
 
     targets = _resolve_targets(args)
 
@@ -184,6 +443,21 @@ def _resolve_targets(args) -> list[str]:
             return lines
         except FileNotFoundError:
             print(f"[!] Targets file not found: {args.targets}")
+            sys.exit(1)
+    if getattr(args, "har", None):
+        # Derive target from the first entry in the HAR file
+        if args.target:
+            return [args.target]
+        try:
+            import json as _json
+            from urllib.parse import urlparse as _up
+            with open(args.har) as f:
+                har = _json.load(f)
+            first_url = har["log"]["entries"][0]["request"]["url"]
+            p = _up(first_url)
+            return [f"{p.scheme}://{p.netloc}"]
+        except Exception:
+            print("[!] Could not derive target from HAR — pass --target explicitly.")
             sys.exit(1)
     return [args.target]
 
@@ -230,6 +504,20 @@ def _run_multi_target(targets: list[str], args) -> None:
 
 def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     """Run scan against one target. Returns 1 if --fail-on threshold is breached."""
+    # Apply scan profile first (lowest priority), then persisted policy
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        from scanner.core import profiles as _profiles
+        try:
+            prof = _profiles.load(profile_name)
+            _profiles.apply_to_namespace(prof, args)
+        except ValueError as e:
+            print(f"[!] {e}")
+            sys.exit(1)
+
+    # Apply persisted policy defaults (CLI overrides them via argparse defaults check)
+    _policy.apply_to_namespace(_policy.load(), args)
+
     auth = _build_auth(args)
     login_flow = _build_login_flow(args)
     modules = _build_modules(args)
@@ -250,8 +538,34 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         template_dirs=args.templates or [],
         proxy=getattr(args, "proxy", None),
         passive=getattr(args, "passive", False),
+        follow_robots=getattr(args, "follow_robots", False),
+        use_oob=not getattr(args, "no_oob", False),
+        oob_server=getattr(args, "oob_server", None) or "oast.pro",
         include_patterns=getattr(args, "include", None) or [],
         exclude_patterns=getattr(args, "exclude", None) or [],
+        rate_limit_rps=getattr(args, "rate_limit", 10),
+        har_file=getattr(args, "har", None),
+        wsdl_url=getattr(args, "wsdl", None),
+        jwt_wordlist=getattr(args, "jwt_wordlist", None),
+        path_wordlist=getattr(args, "wordlist", None),
+        param_wordlist=getattr(args, "param_wordlist", None),
+        subdomain_wordlist=getattr(args, "subdomain_wordlist", None),
+        scan_policy_file=getattr(args, "policy", None),
+        force_full_scan=getattr(args, "full", False),
+        timeout=getattr(args, "timeout", 10),
+        retries=getattr(args, "retries", 0),
+        user_agent=getattr(args, "user_agent", None),
+        verbose=getattr(args, "verbose", False),
+        no_color=getattr(args, "no_color", False),
+        max_time_minutes=getattr(args, "max_time", 0),
+        headers=_parse_custom_headers(getattr(args, "custom_headers", [])),
+        extensions=_parse_extensions(getattr(args, "extensions", None)),
+        filter_status_codes=_parse_status_codes(getattr(args, "filter_status", None)),
+        random_agent=getattr(args, "random_agent", False),
+        cookie_jar=getattr(args, "cookie_jar", None),
+        dbms=getattr(args, "dbms", None),
+        level=getattr(args, "level", 1),
+        risk=getattr(args, "risk", 1),
     )
 
     current_scan_id = args.resume or str(_uuid.uuid4())
@@ -282,6 +596,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
 
     # Live findings callback — prints each finding as it is discovered
     _live = getattr(args, "live", False)
+    _no_color = getattr(args, "no_color", False) or not sys.stdout.isatty()
     _severity_colours = {
         "critical": "\033[91m", "high": "\033[91m",
         "medium": "\033[93m", "low": "\033[94m", "info": "\033[96m",
@@ -290,9 +605,10 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
 
     def _live_print(finding):
         sev = finding.severity.value
-        colour = _severity_colours.get(sev, "")
+        colour = "" if _no_color else _severity_colours.get(sev, "")
+        reset = "" if _no_color else _RESET
         line = (
-            f"{colour}[LIVE][{sev.upper():<8}]{_RESET} "
+            f"{colour}[LIVE][{sev.upper():<8}]{reset} "
             f"{finding.title}  —  {finding.url}"
         )
         if print_lock:
@@ -301,7 +617,32 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         else:
             print(line, flush=True)
 
-    finding_callback = _live_print if _live else None
+    # Notifier — posts findings to Slack/Teams/Discord/webhook in real time
+    _notifier = None
+    _notify_slack = getattr(args, "notify_slack", None)
+    _notify_teams = getattr(args, "notify_teams", None)
+    _notify_discord = getattr(args, "notify_discord", None)
+    _notify_webhook = getattr(args, "notify_webhook", None)
+    if any([_notify_slack, _notify_teams, _notify_discord, _notify_webhook]):
+        from scanner.core.notifier import Notifier
+        from scanner.core.scan_result import Severity as _Severity
+        _min_sev_str = getattr(args, "notify_min_severity", "high")
+        _min_sev = _Severity(_min_sev_str)
+        _notifier = Notifier(
+            slack_url=_notify_slack,
+            teams_url=_notify_teams,
+            discord_url=_notify_discord,
+            webhook_url=_notify_webhook,
+            min_severity=_min_sev,
+        )
+        if _live:
+            def finding_callback(finding):
+                _live_print(finding)
+                _notifier(finding)
+        else:
+            finding_callback = _notifier
+    else:
+        finding_callback = _live_print if _live else None
 
     mode_tags = []
     if config.passive:
@@ -311,30 +652,127 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     if config.browser:
         mode_tags.append("browser")
 
+    # First-run bootstrap: download Nuclei templates if not yet installed
+    from scanner.core import updater as _updater
+    if not getattr(args, "skip_templates", False):
+        _updater.bootstrap_if_needed()
+    # Non-blocking update check (prints a notice if templates are outdated)
+    _updater.check_for_updates(auto=getattr(args, "auto_update", False))
+
     print(f"[*] Scan ID: {current_scan_id}")
     print(f"[*] Target:  {target}")
     print(f"[*] Depth:   {config.max_depth}  |  Max pages: {config.max_pages}", end="")
     if mode_tags:
         print(f"  |  {', '.join(mode_tags)}", end="")
     print()
+    if profile_name:
+        print(f"[*] Profile: {profile_name}")
     if config.modules:
         print(f"[*] Modules: {', '.join(config.modules)}")
     if config.compliance:
         print(f"[*] Compliance: {', '.join(config.compliance).upper()}")
     print()
 
-    result, report_md = run_scan(
-        config=config, api_key=api_key, scan_id=current_scan_id,
-        finding_callback=finding_callback,
-    )
+    # Progress bar (--stats) — renders on stderr so it doesn't pollute stdout reports
+    _stats = getattr(args, "stats", False)
+    _progress_cb = None
+    if _stats and not _no_color:
+        import time as _time
+        _bar_start = _time.monotonic()
+
+        def _progress_cb(done: int, total: int, findings: int):
+            if total == 0:
+                return
+            pct = done / total
+            filled = int(30 * pct)
+            bar = "\033[92m" + "█" * filled + "\033[90m" + "░" * (30 - filled) + "\033[0m"
+            elapsed = _time.monotonic() - _bar_start
+            eta = (elapsed / pct - elapsed) if pct > 0 else 0
+            line = (
+                f"\r[{bar}] {pct * 100:5.1f}%  "
+                f"{done}/{total} checks  "
+                f"{findings} finding{'s' if findings != 1 else ''}  "
+                f"eta {eta:.0f}s   "
+            )
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            if done == total:
+                sys.stderr.write("\r" + " " * len(line) + "\r")
+                sys.stderr.flush()
+
+    workflow_name = getattr(args, "workflow", None)
+    if workflow_name:
+        from scanner.core.workflow import load as _load_workflow, run_workflow as _run_workflow
+        try:
+            wf = _load_workflow(workflow_name)
+        except ValueError as e:
+            print(f"[!] {e}")
+            sys.exit(1)
+        result = _run_workflow(wf, config, api_key=api_key,
+                               finding_callback=finding_callback,
+                               concurrency=getattr(args, "concurrency", 8))
+        report_md = None
+    else:
+        result, report_md = run_scan(
+            config=config, api_key=api_key, scan_id=current_scan_id,
+            finding_callback=finding_callback,
+            concurrency=getattr(args, "concurrency", 8),
+            progress_callback=_progress_cb,
+        )
+
+    # SOAP/WSDL scan (if --wsdl provided) — runs after the main scan
+    wsdl_url = getattr(args, "wsdl", None)
+    if wsdl_url:
+        from scanner.core.soap_scanner import scan_wsdl
+        import httpx as _httpx
+        print(f"\n[*] SOAP/WSDL scan: {wsdl_url}")
+        _soap_proxies = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
+        with _httpx.Client(follow_redirects=True, timeout=15, verify=False, proxies=_soap_proxies) as _soap_client:
+            soap_findings = scan_wsdl(wsdl_url, _soap_client, config)
+        if soap_findings:
+            print(f"[+] SOAP findings: {len(soap_findings)}")
+            result.findings.extend(soap_findings)
+            for f in soap_findings:
+                if finding_callback:
+                    finding_callback(f)
+        else:
+            print("[+] SOAP scan: no issues found")
+
+    # gRPC scan (if requested) — runs after the main scan
+    grpc_endpoint = getattr(args, "grpc", None)
+    if grpc_endpoint:
+        from scanner.core.grpc_scanner import scan_grpc
+        print(f"\n[*] gRPC scan: {grpc_endpoint}")
+        grpc_result = scan_grpc(grpc_endpoint, config)
+        if grpc_result.error:
+            print(f"[!] gRPC: {grpc_result.error}")
+        else:
+            print(f"[+] gRPC services: {len(grpc_result.services)}  methods: {len(grpc_result.methods)}")
+            result.findings.extend(grpc_result.findings)
+            for f in grpc_result.findings:
+                if finding_callback:
+                    finding_callback(f)
 
     summary = result.summary()
-    print(f"[+] Scan complete in {summary['duration_seconds']:.1f}s")
-    print(f"[+] Pages crawled: {summary['pages_crawled']}")
-    print(f"[+] Findings: {summary['total_findings']} total")
+    dur = summary['duration_seconds']
+    pages = summary['pages_crawled']
+    _no_color_out = getattr(args, "no_color", False) or not sys.stdout.isatty()
+    _G = "" if _no_color_out else "\033[92m"
+    _R = "" if _no_color_out else "\033[0m"
+    if dur > 0 and pages > 0:
+        rate = pages / dur
+        rps_hint = f"  (~{rate:.1f} pages/s)" if rate >= 1 else f"  (~{dur / pages:.0f}s/page)"
+    else:
+        rps_hint = ""
+    print(f"\n{_G}[+] Scan complete{_R} in {dur:.1f}s{rps_hint}")
+    print(f"[+] Pages crawled:  {pages}")
+    print(f"[+] Findings:       {summary['total_findings']} total")
     for severity, count in summary["by_severity"].items():
         if count:
-            print(f"    {severity.upper():<12} {count}")
+            sev_color = {"critical": "\033[91m", "high": "\033[91m", "medium": "\033[93m",
+                         "low": "\033[94m", "info": "\033[96m"}.get(severity, "")
+            sc = "" if _no_color_out else sev_color
+            print(f"    {sc}{severity.upper():<12}{_R} {count}")
 
     if result.compliance_reports:
         print()
@@ -393,6 +831,22 @@ def _write_reports(args, result, report_md, slug: str) -> None:
         except RuntimeError as e:
             print(f"[!] PDF generation skipped: {e}")
 
+    if args.output in ("burp", "all"):
+        try:
+            from scanner.reporters.burp_reporter import generate_burp
+            burp_path = generate_burp(result, f"kagesec_report{slug}.xml")
+            print(f"[+] Burp XML report: {burp_path}")
+        except Exception as e:
+            print(f"[!] Burp export failed: {e}")
+
+    if args.output in ("zap", "all"):
+        try:
+            from scanner.reporters.zap_reporter import generate_zap
+            zap_path = generate_zap(result, f"kagesec_report{slug}_zap.json")
+            print(f"[+] ZAP JSON report: {zap_path}")
+        except Exception as e:
+            print(f"[!] ZAP export failed: {e}")
+
 
 def _findings_dict(result) -> dict:
     summary = result.summary()
@@ -418,6 +872,7 @@ def _findings_dict(result) -> dict:
                 "cvss": f.cvss,
                 "remediation": f.remediation,
                 "standards": f.standards,
+                "poc_curl": f.poc_curl,
             }
             for f in result.findings
             if not f.false_positive_suppressed
@@ -558,6 +1013,34 @@ def _build_modules(args) -> list[str] | None:
     return modules
 
 
+def _parse_extensions(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    exts = [e.strip() if e.strip().startswith(".") else f".{e.strip()}" for e in raw.split(",") if e.strip()]
+    return exts or None
+
+
+def _parse_status_codes(raw: str | None) -> list[int] | None:
+    if not raw:
+        return None
+    codes = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            codes.append(int(part))
+    return codes or None
+
+
+def _parse_custom_headers(raw: list[str]) -> dict:
+    """Parse ['-H', 'Name:Value', ...] into a dict."""
+    headers = {}
+    for item in raw:
+        if ":" in item:
+            name, _, value = item.partition(":")
+            headers[name.strip()] = value.strip()
+    return headers
+
+
 def _auth_display(args) -> tuple[str, str]:
     if getattr(args, "auth_bearer", None):
         return "Bearer Token", f"{args.auth_bearer[:8]}…"
@@ -667,36 +1150,472 @@ def _import_scan(zip_path: str) -> None:
 # update-templates
 # ---------------------------------------------------------------------------
 
-def _update_templates(dest_dir: str) -> None:
+# Nuclei template keys that KageSec cannot run — filter these out by default
+_UNSUPPORTED_KEYS = ("flow:", "network:", "dns:", "headless:", "ssl:", "websocket:", "whois:")
+
+# Directories inside nuclei-templates to skip entirely (non-HTTP content)
+_SKIP_DIRS = {
+    "dns", "network", "headless", "ssl", "whois",
+    "workflows", ".github", "helpers", "fuzzing",
+}
+
+
+def _is_compatible(content: bytes) -> bool:
+    """Return True if a template only uses features KageSec supports."""
+    try:
+        text = content.decode("utf-8", errors="ignore")
+        return not any(key in text for key in _UNSUPPORTED_KEYS)
+    except Exception:
+        return False
+
+
+def _run_history(args) -> None:
+    from scanner.core.findings_db import (
+        get_scan_history, get_persisting_findings, trending_summary
+    )
+    target = getattr(args, "target", None) or ""
+
+    if getattr(args, "scans", False):
+        rows = get_scan_history(target, limit=args.limit) if target else []
+        if not rows:
+            print("[*] No scan history found.")
+            return
+        print(f"{'Scan ID':<38} {'Target':<35} {'Findings':<10} {'Duration':>10}")
+        print("-" * 95)
+        for r in rows:
+            import datetime
+            ts = datetime.datetime.fromtimestamp(r["started_at"]).strftime("%Y-%m-%d %H:%M")
+            print(f"{r['scan_id']:<38} {r['target']:<35} {r['total_findings']:<10} {r['duration_seconds']:>8.1f}s  {ts}")
+        return
+
+    if getattr(args, "persisting", False) and target:
+        rows = get_persisting_findings(target)
+        if not rows:
+            print("[*] No persisting findings found.")
+            return
+        print(f"{'Severity':<10} {'Occurrences':<13} {'Title':<40} URL")
+        print("-" * 100)
+        for r in rows[:args.limit]:
+            print(f"{r['severity'].upper():<10} {r['occurrences']:<13} {r['title'][:38]:<40} {r['url']}")
+        return
+
+    if target:
+        summary = trending_summary(target)
+        print(f"[+] Target: {summary['target']}")
+        print(f"[+] Scans run:              {summary['scans_run']}")
+        print(f"[+] Unique findings total:  {summary['total_unique_findings']}")
+        print(f"[+] Persisting (multi-scan):{summary['persisting_across_scans']}")
+        print(f"[+] By severity:")
+        for sev, count in summary["by_severity"].items():
+            if count:
+                print(f"    {sev.upper():<12} {count}")
+    else:
+        print("[!] Provide a target URL: kagesec history https://example.com")
+        print("    Options: --scans  --persisting  --limit N")
+
+
+def _run_config(args) -> None:
+    pol = _policy.load()
+
+    if getattr(args, "unset", None):
+        for key in args.unset:
+            pol.pop(key, None)
+        _policy.save(pol)
+        print(f"[+] Unset: {', '.join(args.unset)}")
+        return
+
+    if getattr(args, "set", None):
+        for key, raw_val in args.set:
+            # Coerce common types
+            if raw_val.lower() in ("true", "yes", "1"):
+                val = True
+            elif raw_val.lower() in ("false", "no", "0"):
+                val = False
+            else:
+                try:
+                    val = int(raw_val)
+                except ValueError:
+                    val = raw_val
+            pol[key] = val
+        _policy.save(pol)
+        print(f"[+] Config updated: {_policy._CONFIG_PATH}")
+        _policy.print_policy(_policy.load())
+        return
+
+    _policy.print_policy(pol)
+
+
+def _run_suppress(args) -> None:
+    from scanner.core.suppressions import (
+        add_suppression, remove_suppression, load_suppressions
+    )
+    action = getattr(args, "suppress_action", None)
+    if not action:
+        print("Usage: kagesec suppress <add|list|remove>")
+        print("  add    --title PATTERN [--url-pattern GLOB] [--target URL] [--note TEXT]")
+        print("  list")
+        print("  remove RULE_ID")
+        return
+
+    if action == "list":
+        rules = load_suppressions()
+        if not rules:
+            print("[*] No suppression rules configured.")
+            return
+        print(f"{'ID':<10} {'Title contains':<30} {'URL pattern':<25} {'Target':<30} Note")
+        print("-" * 110)
+        for r in rules:
+            print(
+                f"{r.get('id', ''):<10} {(r.get('title_contains') or ''):<30} "
+                f"{(r.get('url_pattern') or ''):<25} "
+                f"{(r.get('target') or ''):<30} {r.get('note') or ''}"
+            )
+        return
+
+    if action == "add":
+        rule = add_suppression(
+            title_contains=getattr(args, "title", None) or "",
+            url_pattern=getattr(args, "url_pattern", None) or "*",
+            target=getattr(args, "target", None) or "",
+            note=getattr(args, "note", None) or "",
+        )
+        print(f"[+] Suppression rule added (ID: {rule['id']})")
+        return
+
+    if action == "remove":
+        removed = remove_suppression(args.rule_id)
+        if removed:
+            print(f"[+] Rule {args.rule_id} removed.")
+        else:
+            print(f"[!] Rule {args.rule_id} not found.")
+        return
+
+
+def _run_retest(args) -> None:
+    """Re-run a single finding to verify it still exists (Gap 22)."""
+    import httpx
+    from scanner.core.engine import ALL_MODULES
+    from scanner.core.config import ScanConfig
+    from scanner.core.crawler import CrawlResult
+
+    report_path = getattr(args, "report", "kagesec_report.json")
+    try:
+        with open(report_path) as f:
+            report = json.load(f)
+    except FileNotFoundError:
+        print(f"[!] Report not found: {report_path}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"[!] Invalid JSON: {e}")
+        sys.exit(1)
+
+    findings = report.get("findings", [])
+    if not findings:
+        print("[!] No findings in report.")
+        sys.exit(1)
+
+    # Resolve finding by index or title substring
+    finding_id = args.finding_id
+    target_finding = None
+    if finding_id.isdigit():
+        idx = int(finding_id)
+        if 0 <= idx < len(findings):
+            target_finding = findings[idx]
+        else:
+            print(f"[!] Index {idx} out of range (report has {len(findings)} findings).")
+            sys.exit(1)
+    elif finding_id.startswith("title:"):
+        pattern = finding_id[6:].lower()
+        matches = [f for f in findings if pattern in f.get("title", "").lower()]
+        if not matches:
+            print(f"[!] No findings matching title '{pattern}'.")
+            sys.exit(1)
+        target_finding = matches[0]
+        if len(matches) > 1:
+            print(f"[~] {len(matches)} findings matched — using first: {target_finding['title']}")
+    else:
+        # Try title substring without prefix
+        pattern = finding_id.lower()
+        matches = [f for f in findings if pattern in f.get("title", "").lower()]
+        if not matches:
+            print(f"[!] No findings matching '{finding_id}'. Use an index (0-N) or 'title:substring'.")
+            sys.exit(1)
+        target_finding = matches[0]
+
+    url = target_finding.get("url", "")
+    title = target_finding.get("title", "")
+    severity = target_finding.get("severity", "")
+    param = target_finding.get("parameter", "")
+    payload = target_finding.get("payload", "")
+
+    print(f"[*] Retesting finding:")
+    print(f"    Title:     {title}")
+    print(f"    Severity:  {severity.upper()}")
+    print(f"    URL:       {url}")
+    if param:
+        print(f"    Parameter: {param}")
+    if payload:
+        print(f"    Payload:   {payload[:80]}")
+    print()
+
+    # Determine which module to use based on title keywords
+    module_map = {
+        "xss": "xss", "sqli": "sqli", "sql": "sqli", "injection": "sqli",
+        "open redirect": "open_redirect", "redirect": "open_redirect",
+        "csrf": "csrf", "ssrf": "ssrf", "xxe": "xxe",
+        "jwt": "jwt_attacks", "header": "security_headers",
+        "cors": "cors", "directory": "directory_listing",
+        "traversal": "path_traversal", "upload": "file_upload",
+        "deserialization": "deserialization", "graphql": "graphql",
+        "host": "host_header", "csti": "csti",
+        "business": "business_logic", "wizard": "multistep_injection",
+        "blind xss": "blind_xss", "entropy": "session_entropy",
+        "oauth": "oauth",
+    }
+    module_name = None
+    title_lower = title.lower()
+    for keyword, mod in module_map.items():
+        if keyword in title_lower:
+            module_name = mod
+            break
+
+    # Find the module object
+    target_module = None
+    if module_name:
+        for mod in ALL_MODULES:
+            if mod.__name__.split(".")[-1] == module_name:
+                target_module = mod
+                break
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    base_target = f"{parsed.scheme}://{parsed.netloc}"
+
+    api_key = getattr(args, "api_key", None) or os.getenv("ANTHROPIC_API_KEY")
+    config = ScanConfig(target=base_target, max_depth=1, max_pages=1)
+    config.api_key = api_key if not getattr(args, "no_ai", False) else None
+
+    with httpx.Client(follow_redirects=True, timeout=15, verify=False) as client:
+        try:
+            resp = client.get(url, timeout=10)
+            from bs4 import BeautifulSoup
+            from scanner.core.crawler import CrawlResult
+            soup = BeautifulSoup(resp.text, "html.parser")
+            forms = []
+            for form in soup.find_all("form"):
+                from urllib.parse import urljoin
+                action = urljoin(url, form.get("action", url))
+                inputs = [
+                    {"name": inp.get("name", ""), "type": inp.get("type", "text"), "value": inp.get("value", "")}
+                    for inp in form.find_all(["input", "textarea", "select"])
+                ]
+                forms.append({"action": action, "method": form.get("method", "get").lower(), "inputs": inputs})
+
+            page = CrawlResult(
+                url=url,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                body=resp.text,
+                forms=forms,
+            )
+        except Exception as e:
+            print(f"[!] Could not fetch {url}: {e}")
+            sys.exit(1)
+
+        if target_module:
+            print(f"[*] Running module: {module_name}")
+            try:
+                new_findings = target_module.test(page, client, config)
+            except TypeError:
+                try:
+                    new_findings = target_module.test(page, client)
+                except Exception as e2:
+                    print(f"[!] Module error: {e2}")
+                    new_findings = []
+        else:
+            print("[~] Could not map finding to a specific module — running all active modules")
+            new_findings = []
+            for mod in ALL_MODULES:
+                try:
+                    res = mod.test(page, client, config)
+                    new_findings.extend(res or [])
+                except Exception:
+                    pass
+
+    # Report results
+    if not new_findings:
+        print(f"\n[+] RESOLVED — Finding no longer detected.")
+        print(f"    The vulnerability may have been fixed or requires specific conditions.")
+        sys.exit(0)
+
+    matched = [f for f in new_findings if title_lower[:30] in f.title.lower()]
+    if matched:
+        print(f"\n[!] STILL VULNERABLE — Finding confirmed active.")
+        for f in matched:
+            print(f"    [{f.severity.value.upper():<8}] {f.title}")
+            print(f"    URL: {f.url}")
+            if f.evidence:
+                print(f"    Evidence: {f.evidence[:120]}")
+    else:
+        print(f"\n[~] INCONCLUSIVE — {len(new_findings)} findings on this page but original not re-confirmed.")
+        print("    The finding may require specific payload/session context to reproduce.")
+
+
+def _run_issues(args) -> None:
+    """Export findings to Jira or GitHub Issues (Gap 21)."""
+    report_path = getattr(args, "report", "kagesec_report.json")
+    try:
+        with open(report_path) as f:
+            report_data = json.load(f)
+    except FileNotFoundError:
+        print(f"[!] Report not found: {report_path}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"[!] Invalid JSON: {e}")
+        sys.exit(1)
+
+    min_sev = getattr(args, "min_severity", "medium")
+    sev_order = ["critical", "high", "medium", "low", "info"]
+    threshold_idx = sev_order.index(min_sev)
+    findings = [
+        f for f in report_data.get("findings", [])
+        if sev_order.index(f.get("severity", "info")) <= threshold_idx
+    ]
+
+    if not findings:
+        print(f"[*] No findings at {min_sev.upper()} or above to export.")
+        return
+
+    dry_run = getattr(args, "dry_run", False)
+
+    from scanner.core.scan_result import Finding, Severity
+
+    class _MockResult:
+        def __init__(self):
+            self.findings = []
+            self.target = report_data.get("summary", {}).get("target", "unknown")
+            self.compliance_reports = []
+
+    mock = _MockResult()
+    for fd in findings:
+        try:
+            sev = Severity(fd["severity"])
+        except ValueError:
+            sev = Severity.INFO
+        mock.findings.append(Finding(
+            title=fd["title"], severity=sev, url=fd["url"],
+            parameter=fd.get("parameter"), payload=fd.get("payload"),
+            evidence=fd.get("evidence"), description=fd.get("remediation", ""),
+            remediation=fd.get("remediation", ""), cwe=fd.get("cwe", ""),
+            cvss=fd.get("cvss", 0.0), owasp_category=fd.get("owasp_category", ""),
+            confidence=fd.get("confidence", 0.0),
+        ))
+
+    if args.format == "jira":
+        if not args.jira_url or not args.jira_project or not args.jira_token:
+            print("[!] Jira export requires --jira-url, --jira-project, and --jira-token")
+            sys.exit(1)
+        from scanner.reporters.jira_reporter import export_to_jira
+        export_to_jira(
+            mock, args.jira_url, args.jira_project, args.jira_token,
+            dry_run=dry_run,
+        )
+
+    elif args.format == "github":
+        if not args.github_repo or not args.github_token:
+            print("[!] GitHub export requires --github-repo and --github-token")
+            sys.exit(1)
+        from scanner.reporters.github_reporter import export_to_github
+        export_to_github(mock, args.github_repo, args.github_token, dry_run=dry_run)
+
+
+def _update_templates(dest_dir: str, keep_all: bool = False) -> None:
     import urllib.request
+    import urllib.error
     import zipfile
     import io
 
-    REPO = "https://github.com/kagesec/templates/archive/refs/heads/main.zip"
-    print(f"[*] Downloading community templates from {REPO}")
-    print(f"[*] Destination: {dest_dir}")
+    NUCLEI_ZIP = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"
+
+    print("[*] Downloading Nuclei community templates")
+    print(f"    Source:      {NUCLEI_ZIP}")
+    print(f"    Destination: {dest_dir}")
+    if not keep_all:
+        print("    Filter:      compatible templates only (use --all to skip filtering)")
+    print()
 
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with urllib.request.urlopen(REPO, timeout=30) as resp:
+
+        print("[*] Fetching archive (~50 MB) …")
+        req = urllib.request.Request(
+            NUCLEI_ZIP,
+            headers={"User-Agent": "KageSec/1.0 template-updater"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
+        print(f"[+] Downloaded {len(data) // 1_048_576} MB")
+
+        saved = skipped_unsupported = skipped_dir = 0
+
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            count = 0
-            for member in zf.namelist():
-                if not member.endswith(".yaml"):
-                    continue
+            members = [m for m in zf.namelist() if m.endswith(".yaml")]
+            print(f"[*] Processing {len(members):,} YAML files …")
+
+            for member in members:
+                # Strip the top-level repo dir (nuclei-templates-main/...)
                 parts = member.split("/", 1)
                 rel = parts[1] if len(parts) > 1 else member
+
+                # Skip unsupported top-level directories
+                top = rel.split("/")[0].lower()
+                if top in _SKIP_DIRS:
+                    skipped_dir += 1
+                    continue
+
+                content = zf.read(member)
+
+                if not keep_all and not _is_compatible(content):
+                    skipped_unsupported += 1
+                    continue
+
                 out_path = os.path.join(dest_dir, rel)
                 os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                with zf.open(member) as src, open(out_path, "wb") as dst:
-                    dst.write(src.read())
-                count += 1
-        print(f"[+] Downloaded {count} templates to {dest_dir}")
-        print(f"[+] Use them with: kagesec scan <target> --templates {dest_dir}")
+                with open(out_path, "wb") as dst:
+                    dst.write(content)
+                saved += 1
+
+        # Save version stamp so auto-update check knows what's installed
+        try:
+            from scanner.core.updater import get_remote_version, save_local_version
+            remote_ver = get_remote_version()
+            if remote_ver:
+                save_local_version(remote_ver)
+                print(f"[+] Version: {remote_ver}")
+        except Exception:
+            pass
+
+        print()
+        print(f"[+] Saved:   {saved:,} compatible templates")
+        if skipped_unsupported:
+            print(f"[~] Skipped: {skipped_unsupported:,} unsupported (flow/network/dns/headless) — use --all to keep")
+        if skipped_dir:
+            print(f"[~] Skipped: {skipped_dir:,} from non-HTTP directories (dns/network/ssl/…)")
+        print()
+        print(f"[+] Templates saved to: {dest_dir}")
+        print(f"[+] Use them: kagesec scan <target> --templates {dest_dir}")
+        print(f"[+] Or make permanent: add to ~/.kagesec/config.yaml  (coming soon)")
+
+    except urllib.error.URLError as e:
+        print(f"[!] Network error: {e}")
+        print("    Check your internet connection and try again.")
+        sys.exit(1)
+    except zipfile.BadZipFile:
+        print("[!] Downloaded file is not a valid zip — try again.")
+        sys.exit(1)
     except Exception as e:
         print(f"[!] Template update failed: {e}")
-        print("    Contribute templates at: https://github.com/kagesec/templates")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

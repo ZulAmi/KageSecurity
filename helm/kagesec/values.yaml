@@ -1,0 +1,50 @@
+image:
+  repository: ghcr.io/kagesec/kagesec
+  tag: latest
+  pullPolicy: Always
+
+scan:
+  target: "https://example.com"
+  depth: 3
+  maxPages: 50
+  output: sarif
+  failOn: high
+  passive: false
+  noAi: false
+  concurrency: 8
+  rateLimit: 10
+  modules: []         # empty = all modules
+  exclude: []         # URL glob patterns to skip
+  compliance: []      # iso27001 hipaa gdpr appi
+
+auth:
+  bearer: ""
+  cookie: ""
+
+proxy: ""
+
+anthropicApiKey: ""   # set via --set or a secret ref
+nvdApiKey: ""
+
+# Store reports in a PVC mounted at /reports
+reports:
+  enabled: false
+  storageClass: ""
+  size: 1Gi
+  mountPath: /reports
+
+job:
+  restartPolicy: Never
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2
+      memory: 1Gi
+
+serviceAccount:
+  create: true
+  name: ""

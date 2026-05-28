@@ -1,0 +1,45 @@
+name: wordpress
+description: >
+  WordPress-specific workflow: fingerprint → if WordPress detected →
+  run WP-targeted modules and CVE checks.
+
+steps:
+  - id: fingerprint
+    description: "Detect stack and WAF"
+    modules:
+      - version_disclosure
+      - waf_detect
+      - debug_mode
+    depth: 1
+    max_pages: 5
+
+  - id: baseline
+    description: "Universal security baseline"
+    condition: always
+    modules:
+      - security_headers
+      - cors
+      - clickjacking
+      - tls
+      - cookie_security
+
+  - id: wordpress-specific
+    description: "WordPress CVEs and plugin checks (only if WP detected)"
+    condition: "wordpress in fingerprints"
+    modules:
+      - auth_bypass
+      - xss
+      - sqli
+      - exposed_files
+      - api_key_leak
+    templates:
+      - ~/.kagesec/nuclei-templates/wordpress/
+
+  - id: escalation
+    description: "Deep scan on any HIGH+ findings"
+    condition: any_high
+    modules:
+      - form_fuzz
+      - waf_bypass
+      - idor
+      - padding_oracle

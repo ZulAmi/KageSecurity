@@ -85,22 +85,26 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     except Exception:
         pass
 
-    # Test 2: Weak HMAC secret (common secrets)
+    # Test 2: Weak HMAC secret — wordlist from YAML + optional custom list (Gap 17)
     if header.get("alg", "").startswith("HS"):
-        weak_secrets = ["secret", "password", "123456", "key", "jwt_secret", "supersecret", "changeme", ""]
+        weak_secrets = _load_jwt_secrets(getattr(page, "_config", None))
+        alg = header.get("alg", "HS256")
+        hash_fn = hashlib.sha512 if alg == "HS512" else (hashlib.sha384 if alg == "HS384" else hashlib.sha256)
         signing_input = f"{token.rsplit('.', 1)[0]}".encode()
+        cracked = False
         for secret in weak_secrets:
             expected_sig = _b64_encode(
-                hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+                hmac.new(secret.encode(), signing_input, hash_fn).digest()
             )
             if expected_sig == signature:
+                cracked = True
                 findings.append(Finding(
                     title="JWT Signed with Weak Secret Key",
                     severity=Severity.CRITICAL,
                     url=page.url,
                     parameter="JWT signature",
                     payload=f"secret='{secret}'",
-                    evidence=f"JWT signature verified with weak secret: '{secret}'",
+                    evidence=f"JWT signature ({alg}) verified with weak secret: '{secret}'",
                     description=(
                         "The JWT is signed with a trivially guessable secret. "
                         "An attacker can forge tokens with arbitrary claims including admin privileges."
@@ -144,6 +148,42 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         ))
 
     return findings
+
+
+def _load_jwt_secrets(config=None, max_secrets: int = 500) -> List[str]:
+    """Gap 17 — load JWT secrets from YAML wordlist + optional custom file."""
+    import os, yaml
+    secrets: List[str] = []
+
+    # Custom wordlist via --jwt-wordlist
+    custom = getattr(config, "jwt_wordlist", None)
+    if custom and os.path.isfile(custom):
+        try:
+            with open(custom) as f:
+                for line in f:
+                    s = line.strip()
+                    if s:
+                        secrets.append(s)
+        except Exception:
+            pass
+
+    # Built-in YAML wordlist
+    builtin = os.path.join(os.path.dirname(__file__), "..", "payloads", "jwt_secrets.yaml")
+    try:
+        with open(builtin) as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict) and "secrets" in data:
+            for s in data["secrets"]:
+                if str(s) not in secrets:
+                    secrets.append(str(s))
+    except Exception:
+        pass
+
+    # Fallback to hardcoded if nothing loaded
+    if not secrets:
+        secrets = ["secret", "password", "123456", "jwt_secret", "supersecret", "changeme", ""]
+
+    return secrets[:max_secrets]
 
 
 def _test_key_confusion(page, client, header, payload, findings):

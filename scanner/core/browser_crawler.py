@@ -170,10 +170,10 @@ class BrowserCrawler:
 
         page = self._context.new_page()
         network_reqs: List[str] = []
+        spa_routes: List[str] = []
         ws_connections: List[dict] = []
 
         def _on_request(req: Request):
-            # Capture XHR / fetch API calls
             if req.resource_type in ("xhr", "fetch") and _same_origin(req.url, self.base_url):
                 network_reqs.append(req.url)
 
@@ -192,21 +192,63 @@ class BrowserCrawler:
             if resp is None:
                 return
 
+            # Wait for client-side auth guards to redirect and settle
+            try:
+                page.wait_for_load_state("networkidle", timeout=5_000)
+            except Exception:
+                pass
+
             status = resp.status
+            final_url = page.url  # may differ from `url` after client-side redirects
             headers = dict(resp.headers)
             content_type = headers.get("content-type", "")
 
             if "html" not in content_type and "json" not in content_type:
                 return
 
+            # Intercept React Router / history.pushState route changes
+            page.evaluate("""
+                () => {
+                    if (!window.__kagesec_routes) window.__kagesec_routes = [];
+                    const origPush = history.pushState.bind(history);
+                    history.pushState = function(state, title, url) {
+                        if (url) window.__kagesec_routes.push(String(url));
+                        return origPush(state, title, url);
+                    };
+                    const origReplace = history.replaceState.bind(history);
+                    history.replaceState = function(state, title, url) {
+                        if (url) window.__kagesec_routes.push(String(url));
+                        return origReplace(state, title, url);
+                    };
+                }
+            """)
+
+            # Scroll to trigger infinite scroll / lazy-loaded content (up to 3 passes)
+            self._scroll_to_load(page)
+
             body = page.content()
             screenshot = page.screenshot(type="png")
 
-            forms = self._extract_forms(page, url)
-            links = self._extract_links(page, url)
+            forms = self._extract_forms(page, final_url)
+            links = self._extract_links(page, final_url)
+
+            # Collect SPA routes discovered via pushState during scroll/interaction
+            try:
+                pushed = page.evaluate("() => window.__kagesec_routes || []")
+                for route in pushed:
+                    resolved = urljoin(final_url, route).split("#")[0]
+                    if (
+                        _is_navigable(resolved)
+                        and _same_origin(resolved, self.base_url)
+                        and _normalise_for_dedup(resolved) not in self.visited
+                        and self._in_scope(resolved)
+                    ):
+                        spa_routes.append(resolved)
+            except Exception:
+                pass
 
             result = CrawlResult(
-                url=url,
+                url=final_url,
                 status_code=status,
                 headers=headers,
                 body=body,
@@ -218,11 +260,10 @@ class BrowserCrawler:
             )
             results.append(result)
 
-            # Recurse into discovered links
-            for link in links:
+            all_links = list(dict.fromkeys(links + spa_routes))
+            for link in all_links:
                 self._crawl_page(link, depth + 1, results)
 
-            # Also crawl intercepted API endpoints (not already visited)
             for api_url in network_reqs:
                 norm = _normalise_for_dedup(api_url)
                 if norm not in self.visited and len(results) < self.max_pages:
@@ -232,6 +273,22 @@ class BrowserCrawler:
             pass
         finally:
             page.close()
+
+    def _scroll_to_load(self, page: Page, passes: int = 3) -> None:
+        """Scroll to bottom repeatedly to trigger infinite scroll / lazy content."""
+        for _ in range(passes):
+            try:
+                prev_height = page.evaluate("() => document.body.scrollHeight")
+                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=3_000)
+                except Exception:
+                    pass
+                new_height = page.evaluate("() => document.body.scrollHeight")
+                if new_height == prev_height:
+                    break
+            except Exception:
+                break
 
     def _in_scope(self, url: str) -> bool:
         if self._include and not any(fnmatch.fnmatch(url, p) for p in self._include):

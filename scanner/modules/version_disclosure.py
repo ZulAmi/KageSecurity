@@ -6,6 +6,13 @@ from scanner.core.crawler import CrawlResult
 
 VERSION_HEADERS = ["server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"]
 
+# Version patterns scoped to script/link/img src attributes only.
+# Matching anywhere in the body causes false positives on changelogs, docs, and blog posts.
+_SRC_ATTR_RE = re.compile(
+    r'(?:src|href)\s*=\s*["\']([^"\']*?)["\']',
+    re.IGNORECASE,
+)
+
 JS_LIB_PATTERNS = [
     (r"jquery[/-](\d+\.\d+\.\d+)", "jQuery"),
     (r"bootstrap[/-](\d+\.\d+\.\d+)", "Bootstrap"),
@@ -46,9 +53,11 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
                 confidence=1.0,
             ))
 
-    # Check JS library versions in page body
+    # Check JS library versions — only in src/href attribute values, not free text.
+    # Scanning the full body matches changelogs, comments, and documentation pages.
+    src_attrs = " ".join(_SRC_ATTR_RE.findall(page.body or ""))
     for pattern, lib_name in JS_LIB_PATTERNS:
-        match = re.search(pattern, page.body, re.IGNORECASE)
+        match = re.search(pattern, src_attrs, re.IGNORECASE)
         if match:
             findings.append(Finding(
                 title=f"JavaScript Library Version Disclosed: {lib_name}",

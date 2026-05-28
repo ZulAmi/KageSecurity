@@ -1,16 +1,22 @@
+import uuid
 import httpx
 from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 
-EVIL_ORIGIN = "https://evil.kagesec.io"
 NULL_ORIGIN = "null"
 
 
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     findings = []
 
-    for origin, label in [(EVIL_ORIGIN, "arbitrary origin"), (NULL_ORIGIN, "null origin")]:
+    # Use a randomised subdomain so no production allowlist could legitimately contain it.
+    # If the server reflects this back, the CORS policy is doing dynamic origin reflection,
+    # not a static allowlist match.
+    probe_id = uuid.uuid4().hex[:8]
+    evil_origin = f"https://kagesec-probe-{probe_id}.evil.invalid"
+
+    for origin, label in [(evil_origin, "arbitrary origin"), (NULL_ORIGIN, "null origin")]:
         try:
             resp = client.get(page.url, headers={"Origin": origin})
         except Exception:
@@ -20,13 +26,14 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         acac = resp.headers.get("access-control-allow-credentials", "").lower()
 
         if acao == "*":
+            # Wildcard + credentials is a real misconfiguration; wildcard alone is advisory
             findings.append(Finding(
                 title="CORS Wildcard — Access-Control-Allow-Origin: *",
                 severity=Severity.MEDIUM,
                 url=page.url,
                 parameter=None,
                 payload=f"Origin: {origin}",
-                evidence=f"Access-Control-Allow-Origin: * (reflects wildcard for {label})",
+                evidence=f"Access-Control-Allow-Origin: * (wildcard CORS policy active)",
                 description=(
                     "A wildcard CORS policy allows any website to make cross-origin requests "
                     "and read the response. This exposes API data to malicious third-party pages."
@@ -40,9 +47,11 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
             ))
             break
 
-        if (acao == origin or acao == EVIL_ORIGIN) and acac == "true":
+        # Confirmed reflection: server echoed back the randomised origin we invented —
+        # no legitimate allowlist would contain this value.
+        if acao == origin and acac == "true":
             findings.append(Finding(
-                title="CORS Misconfiguration — Arbitrary Origin with Credentials",
+                title="CORS Misconfiguration — Origin Reflection with Credentials",
                 severity=Severity.HIGH,
                 url=page.url,
                 parameter=None,
@@ -50,7 +59,7 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
                 evidence=(
                     f"Access-Control-Allow-Origin: {acao}\n"
                     f"Access-Control-Allow-Credentials: true\n"
-                    f"Server reflected {label} with credentials allowed"
+                    f"Server dynamically reflected {label} '{origin}' with credentials allowed"
                 ),
                 description=(
                     "The server reflects arbitrary origins and allows credentials (cookies/auth headers). "
@@ -75,7 +84,7 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
                 url=page.url,
                 parameter=None,
                 payload=f"Origin: {origin}",
-                evidence=f"Access-Control-Allow-Origin: {acao} (reflected {label})",
+                evidence=f"Access-Control-Allow-Origin: {acao} (dynamically reflected {label})",
                 description=(
                     "The server reflects arbitrary origins without credentials. "
                     "Unauthenticated API responses can be read by any third-party page."

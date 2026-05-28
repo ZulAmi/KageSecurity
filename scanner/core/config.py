@@ -41,3 +41,23 @@ class ScanConfig:
     passive: bool = False                    # Passive mode — no injection, headers/cookies/content only
     include_patterns: List[str] = field(default_factory=list)   # Glob patterns — only crawl matching URLs
     exclude_patterns: List[str] = field(default_factory=list)   # Glob patterns — skip matching URLs
+    har_file: Optional[str] = None                              # Path to .har file (skips live crawl)
+    wsdl_url: Optional[str] = None           # SOAP/WSDL endpoint to scan (Gap 16)
+    jwt_wordlist: Optional[str] = None       # Custom JWT secrets wordlist path (Gap 17)
+    path_wordlist: Optional[str] = None      # Custom path discovery wordlist (Gap 10)
+    param_wordlist: Optional[str] = None     # Custom parameter discovery wordlist (Gap 11)
+    subdomain_wordlist: Optional[str] = None # Custom subdomain wordlist (Gap 12)
+    scan_policy_file: Optional[str] = None   # Per-module scan policy YAML (Gap 25)
+    force_full_scan: bool = False            # Ignore delta state, always do a full scan (Gap 28)
+    retries: int = 0                         # HTTP request retry count on failure
+    user_agent: Optional[str] = None         # Custom User-Agent string
+    verbose: bool = False                    # Print each URL/module as it runs
+    no_color: bool = False                   # Disable ANSI colors
+    max_time_minutes: int = 0               # Hard scan time budget (0 = unlimited)
+    extensions: Optional[List[str]] = None   # File extensions to append in path discovery
+    filter_status_codes: Optional[List[int]] = None  # HTTP codes to suppress in discovery
+    random_agent: bool = False              # Rotate User-Agent per request
+    cookie_jar: Optional[str] = None        # Path to Netscape cookie jar file
+    dbms: Optional[str] = None              # Target DBMS hint for SQLi (mysql/postgres/mssql/oracle/sqlite)
+    level: int = 1                          # Scan aggressiveness 1-5
+    risk: int = 1                           # Risk of side-effects 1-3

@@ -3,6 +3,12 @@ from urllib.parse import urljoin, urlparse
 from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
+from scanner.utils.http import is_spa_catchall
+
+# Content-Types that are never a real .env / config / archive file
+_HTML_CT = ("text/html",)
+# Binary file extensions that must NOT be text/html to be real
+_BINARY_EXTS = {".zip", ".tar.gz", ".gz", ".sql", ".sqlite", ".db", ".bak", ".7z"}
 
 SENSITIVE_PATHS = [
     # Secrets & credentials
@@ -68,13 +74,44 @@ SENSITIVE_PATHS = [
 ]
 
 CONTENT_SIGNATURES = {
-    ".env": ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL"],
-    ".git/config": ["[core]", "[remote"],
-    "wp-config.php": ["DB_PASSWORD", "table_prefix"],
-    "phpinfo.php": ["PHP Version", "phpinfo()"],
-    "backup.sql": ["INSERT INTO", "CREATE TABLE"],
-    "db.sqlite": ["SQLite format"],
-    "adminer.php": ["Adminer", "adminer"],
+    # Environment files — must contain at least one KEY=value pattern
+    ".env":             ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL", "APP_KEY", "JWT_SECRET", "REDIS_URL"],
+    ".env.local":       ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL", "APP_KEY", "JWT_SECRET"],
+    ".env.production":  ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL", "APP_KEY"],
+    ".env.backup":      ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL"],
+    # Git
+    ".git/config":      ["[core]", "[remote"],
+    ".git/HEAD":        ["ref:", "commit"],
+    ".git/COMMIT_EDITMSG": [],  # any content is meaningful; checked via Content-Type
+    # Config files
+    "wp-config.php":            ["DB_PASSWORD", "table_prefix", "define("],
+    "configuration.php":        ["public $password", "public $db"],
+    "settings.py":              ["SECRET_KEY", "DATABASES", "INSTALLED_APPS"],
+    "application.properties":   ["spring.datasource", "server.port", "spring.security"],
+    "application.yml":          ["datasource:", "password:", "spring:"],
+    "database.yml":             ["adapter:", "password:", "database:"],
+    "web.config":               ["connectionStrings", "appSettings", "<configuration"],
+    # PHP info pages
+    "phpinfo.php":      ["PHP Version", "phpinfo()"],
+    "info.php":         ["PHP Version", "phpinfo()"],
+    # Database
+    "backup.sql":       ["INSERT INTO", "CREATE TABLE", "LOCK TABLES"],
+    "dump.sql":         ["INSERT INTO", "CREATE TABLE", "LOCK TABLES"],
+    "db.sqlite":        ["SQLite format"],
+    "database.db":      ["SQLite format"],
+    # Admin tools
+    "adminer.php":      ["Adminer", "adminer"],
+    # Logs — must contain log-like patterns, not just HTML
+    "logs/error.log":   ["[error]", "Exception", "Traceback", "Error:"],
+    "log/error.log":    ["[error]", "Exception", "Traceback", "Error:"],
+    "access.log":       ["GET /", "POST /", "HTTP/1"],
+    "debug.log":        ["[debug]", "[error]", "Exception", "Traceback"],
+    "laravel.log":      ["local.ERROR", "local.WARNING", "production.ERROR"],
+    # API specs — must look like JSON/YAML specs, not HTML
+    "swagger.json":     ['"swagger":', '"openapi":', '"paths":'],
+    "openapi.json":     ['"openapi":', '"paths":', '"info":'],
+    "v1/swagger.json":  ['"swagger":', '"openapi":', '"paths":'],
+    "api/swagger.json": ['"swagger":', '"openapi":', '"paths":'],
 }
 
 
@@ -97,11 +134,29 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         if resp.status_code not in (200, 206):
             continue
 
-        # For some paths, verify content to reduce false positives
+        # Reject SPA catch-all responses (React/Next.js returning index.html for all routes)
+        if is_spa_catchall(resp):
+            continue
+
+        ct = resp.headers.get("content-type", "").lower()
+
+        # Binary file extensions must not be served as text/html
+        ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
+        if any(path.endswith(be) for be in _BINARY_EXTS) and "text/html" in ct:
+            continue
+
+        # Verify content signatures — every path must either have known signatures
+        # that appear in the body, or have a non-HTML Content-Type.
         filename = path.split("/")[-1]
         signatures = CONTENT_SIGNATURES.get(filename, [])
-        if signatures and not any(sig in resp.text for sig in signatures):
-            continue
+        if signatures:
+            if not any(sig in resp.text for sig in signatures):
+                continue
+        else:
+            # No signatures defined — only report if Content-Type is not text/html
+            # (prevents SPA index.html being flagged for paths like /admin/, /backup/, etc.)
+            if "text/html" in ct:
+                continue
 
         findings.append(Finding(
             title=f"Sensitive File Exposed: {path}",

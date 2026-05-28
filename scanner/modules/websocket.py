@@ -19,6 +19,19 @@ _INJECTION_PAYLOADS = [
     "'\"--><script>alert(1)</script>",
     "' OR '1'='1",
     "{{7*7}}",
+    ";id;",
+    "../../../../etc/passwd",
+    "${7*7}",
+    "' AND SLEEP(3)--",
+]
+
+# Common WebSocket message formats to try when no observed messages exist (Gap 8)
+_PROBE_FRAMES = [
+    '{"type":"ping","data":"PAYLOAD"}',
+    '{"action":"test","value":"PAYLOAD"}',
+    '{"msg":"PAYLOAD"}',
+    '{"data":"PAYLOAD"}',
+    "PAYLOAD",
 ]
 
 
@@ -62,10 +75,9 @@ def test(page: CrawlResult, client: httpx.Client, config=None) -> List[Finding]:
         # 2. Missing Origin validation (test with spoofed origin)
         _test_origin_validation(ws_url, page.url, findings)
 
-        # 3. Message injection — test if observed messages are reflected
+        # 3. Message injection — replay observed frames or use probe frames (Gap 8)
         messages = ws.get("messages_sent", []) + ws.get("messages_received", [])
-        if messages:
-            _test_message_injection(ws_url, page.url, messages, findings)
+        _test_message_injection(ws_url, page.url, messages or [], findings)
 
     return findings
 
@@ -169,12 +181,16 @@ def _test_message_injection(
         except ImportError:
             return
 
-    for payload in _INJECTION_PAYLOADS:
-        for original_msg in observed_messages[:3]:  # only replay first 3 observed messages
-            if not isinstance(original_msg, str) or not original_msg.strip():
-                continue
+    # If no observed messages, probe with generic frame templates (Gap 8)
+    frames_to_test = []
+    if observed_messages:
+        frames_to_test = [m for m in observed_messages[:3] if isinstance(m, str) and m.strip()]
+    if not frames_to_test:
+        frames_to_test = _PROBE_FRAMES
 
-            injected = original_msg[:200] + payload  # append payload to original message
+    for payload in _INJECTION_PAYLOADS:
+        for original_msg in frames_to_test:
+            injected = original_msg.replace("PAYLOAD", payload) if "PAYLOAD" in original_msg else original_msg[:200] + payload
 
             try:
                 if _ws_sync is not None:

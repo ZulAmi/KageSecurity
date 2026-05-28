@@ -1,0 +1,14 @@
+# Cross-class form fuzzing payloads.
+# Format: list of [payload, class_name, detection_string, severity, cwe, owasp]
+# Add payloads to ~/.kagesec/payloads/form_fuzz.yaml to extend without modifying source.
+payloads:
+  - ["'", "SQLi probe", "sql syntax", "critical", "CWE-89", "A03:2021 Injection"]
+  - ["' OR '1'='1", "SQLi boolean", "sql syntax", "critical", "CWE-89", "A03:2021 Injection"]
+  - ["<script>alert(1)</script>", "XSS reflected", "<script>alert(1)</script>", "high", "CWE-79", "A03:2021 Injection"]
+  - ["{{7*7}}", "SSTI probe", "49", "high", "CWE-1336", "A03:2021 Injection"]
+  - ["${7*7}", "SSTI EL probe", "49", "high", "CWE-1336", "A03:2021 Injection"]
+  - ["../../../../etc/passwd", "Path traversal", "root:x:0:0", "high", "CWE-22", "A01:2021 Broken Access Control"]
+  - [";id;", "Command injection", "uid=", "critical", "CWE-78", "A03:2021 Injection"]
+  - ["| id", "Command injection pipe", "uid=", "critical", "CWE-78", "A03:2021 Injection"]
+  - ["http://169.254.169.254/latest/meta-data/", "SSRF AWS", "ami-id", "high", "CWE-918", "A10:2021 SSRF"]
+  - ["%00", "Null byte", "Warning:", "low", "CWE-20", "A03:2021 Injection"]

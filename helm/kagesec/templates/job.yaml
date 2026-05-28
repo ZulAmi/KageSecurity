@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kagesec.fullname" . }}
+  labels:
+    {{- include "kagesec.labels" . | nindent 4 }}
+spec:
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "kagesec.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: {{ .Values.job.restartPolicy }}
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "kagesec.serviceAccountName" . }}
+      {{- end }}
+      containers:
+        - name: kagesec
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - kagesec
+            - scan
+            - {{ .Values.scan.target | quote }}
+            - --depth
+            - {{ .Values.scan.depth | quote }}
+            - --max-pages
+            - {{ .Values.scan.maxPages | quote }}
+            - --output
+            - {{ .Values.scan.output | quote }}
+            - --fail-on
+            - {{ .Values.scan.failOn | quote }}
+            - --concurrency
+            - {{ .Values.scan.concurrency | quote }}
+            - --rate-limit
+            - {{ .Values.scan.rateLimit | quote }}
+            {{- if .Values.scan.passive }}
+            - --passive
+            {{- end }}
+            {{- if .Values.scan.noAi }}
+            - --no-ai
+            {{- end }}
+            {{- if .Values.scan.modules }}
+            - --modules
+            {{- range .Values.scan.modules }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.scan.exclude }}
+            - --exclude
+            {{- range .Values.scan.exclude }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.scan.compliance }}
+            - --compliance
+            {{- range .Values.scan.compliance }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.auth.bearer }}
+            - --auth-bearer
+            - {{ .Values.auth.bearer | quote }}
+            {{- end }}
+            {{- if .Values.auth.cookie }}
+            - --auth-cookie
+            - {{ .Values.auth.cookie | quote }}
+            {{- end }}
+            {{- if .Values.proxy }}
+            - --proxy
+            - {{ .Values.proxy | quote }}
+            {{- end }}
+          env:
+            {{- if .Values.anthropicApiKey }}
+            - name: ANTHROPIC_API_KEY
+              value: {{ .Values.anthropicApiKey | quote }}
+            {{- end }}
+            {{- if .Values.nvdApiKey }}
+            - name: NVD_API_KEY
+              value: {{ .Values.nvdApiKey | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.job.resources | nindent 12 }}
+          {{- if .Values.reports.enabled }}
+          volumeMounts:
+            - name: reports
+              mountPath: {{ .Values.reports.mountPath }}
+          {{- end }}
+      {{- if .Values.reports.enabled }}
+      volumes:
+        - name: reports
+          persistentVolumeClaim:
+            claimName: {{ include "kagesec.fullname" . }}-reports
+      {{- end }}

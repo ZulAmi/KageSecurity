@@ -19,7 +19,9 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
 
     _check_introspection(page, client, findings)
     _check_batch_abuse(page, client, findings)
+    _check_mutation_alias_ratelimit(page, client, findings)
     _check_field_suggestions(page, client, findings)
+    _check_query_depth(page, client, findings)
     return findings
 
 
@@ -122,6 +124,105 @@ def _check_batch_abuse(page: CrawlResult, client: httpx.Client, findings: List[F
                 owasp_category="A04:2021 Insecure Design",
                 standards=["ISO27001-8.23"],
                 confidence=0.9,
+            ))
+    except Exception:
+        pass
+
+
+def _check_mutation_alias_ratelimit(page: CrawlResult, client: httpx.Client, findings: List[Finding]):
+    """
+    Gap 7 — alias-based rate-limit bypass via batched mutations.
+    Send 50 aliased login mutations; if all succeed (no rate-limit response),
+    the endpoint is vulnerable to brute-force via alias batching.
+    """
+    aliases = " ".join([
+        f'm{i}: login(username: "test@example.com", password: "wrong{i}") {{ token }}'
+        for i in range(50)
+    ])
+    query = f"mutation {{ {aliases} }}"
+    try:
+        resp = client.post(
+            page.url,
+            json={"query": query},
+            headers={"Content-Type": "application/json"},
+            timeout=15,
+        )
+        data = resp.json()
+        errors = data.get("errors", [])
+        # If we get 50 responses with no rate-limit / too-many-requests error
+        resp_data = data.get("data", {})
+        if resp.status_code not in (429,) and len(resp_data) >= 20 and not any(
+            "rate" in str(e).lower() or "limit" in str(e).lower() for e in errors
+        ):
+            findings.append(Finding(
+                title="GraphQL Alias-Based Rate-Limit Bypass",
+                severity=Severity.HIGH,
+                url=page.url,
+                parameter=None,
+                payload='mutation { m0: login(...) m1: login(...) ... m49: login(...) }',
+                evidence=(
+                    f"50 aliased mutations returned {len(resp_data)} data fields "
+                    "without triggering rate limiting"
+                ),
+                description=(
+                    "GraphQL alias batching allows attackers to send hundreds of mutations "
+                    "(e.g., login attempts) in a single HTTP request, bypassing per-request "
+                    "rate limits. This enables high-speed credential stuffing attacks."
+                ),
+                remediation=(
+                    "Limit the maximum number of aliases per query (recommended: ≤10). "
+                    "Apply rate limiting per-field or per-resolver, not just per-request. "
+                    "Use a query complexity analyser."
+                ),
+                cwe="CWE-770",
+                cvss=7.5,
+                owasp_category="A04:2021 Insecure Design",
+                standards=["ISO27001-8.23"],
+                confidence=0.80,
+            ))
+    except Exception:
+        pass
+
+
+def _check_query_depth(page: CrawlResult, client: httpx.Client, findings: List[Finding]):
+    """Test for missing query depth limits (DoS vector)."""
+    depth = " ".join(["{ user" for _ in range(12)]) + " { id }" + " }" * 12
+    query = f"{{ {depth} }}"
+    try:
+        resp = client.post(
+            page.url,
+            json={"query": query},
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        data = resp.json()
+        # No depth error = depth limit not enforced
+        errors = data.get("errors", [])
+        has_depth_error = any(
+            "depth" in str(e).lower() or "complex" in str(e).lower()
+            for e in errors
+        )
+        if not has_depth_error and resp.status_code == 200:
+            findings.append(Finding(
+                title="GraphQL — No Query Depth Limit",
+                severity=Severity.MEDIUM,
+                url=page.url,
+                parameter=None,
+                payload=f'{{"query": "{query[:100]}..."}}',
+                evidence="Deeply nested query (depth 12) was accepted without a depth-limit error",
+                description=(
+                    "GraphQL endpoints without query depth limits are vulnerable to "
+                    "deeply nested queries that can exhaust server resources (DoS)."
+                ),
+                remediation=(
+                    "Implement query depth limits (e.g., max depth 5–7). "
+                    "Use graphql-depth-limit or query complexity analysis libraries."
+                ),
+                cwe="CWE-770",
+                cvss=5.3,
+                owasp_category="A04:2021 Insecure Design",
+                standards=["ISO27001-8.23"],
+                confidence=0.75,
             ))
     except Exception:
         pass

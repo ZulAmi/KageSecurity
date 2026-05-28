@@ -41,6 +41,28 @@ class Finding:
     ai_exploitability: Optional[str] = None
     ai_business_impact: Optional[str] = None
     ai_attack_scenario: Optional[str] = None
+    poc_curl: Optional[str] = None         # Gap 19 — ready-to-run curl command to reproduce
+
+    def build_poc_curl(self, method: str = "GET", extra_headers: Optional[Dict] = None) -> str:
+        """Gap 19 — generate a curl command reproducing this finding."""
+        parts = [f"curl -sk -X {method.upper()}"]
+        if extra_headers:
+            for k, v in extra_headers.items():
+                parts.append(f"-H '{k}: {v}'")
+        if self.payload and method.upper() in ("POST", "PUT", "PATCH"):
+            parts.append(f"--data '{self.payload}'")
+        url = self.url
+        if self.parameter and self.payload and method.upper() == "GET":
+            from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            qs[self.parameter] = [self.payload]
+            from urllib.parse import urlencode as _enc
+            url = urlunparse(parsed._replace(query=_enc(qs, doseq=True)))
+        parts.append(f"'{url}'")
+        cmd = " ".join(parts)
+        self.poc_curl = cmd
+        return cmd
 
 
 @dataclass

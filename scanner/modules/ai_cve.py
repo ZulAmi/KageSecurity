@@ -14,47 +14,14 @@ import time. Global state is keyed by config.target so concurrent scans stay iso
 """
 from __future__ import annotations
 
-import re
 from typing import List
 from urllib.parse import urlparse
 
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding
+from scanner.core.fingerprinter import fingerprint_page, _SKIP_EXTENSIONS
 
 _state: dict[str, dict] = {}
-
-_SKIP_EXTENSIONS = (
-    ".css", ".js", ".png", ".jpg", ".svg", ".woff", ".ico", ".ttf", ".map",
-)
-
-_HEADER_FINGERPRINTS = [
-    ("Web Server",         "server"),
-    ("Scripting Language", "x-powered-by"),
-    ("ASP.NET Version",    "x-aspnet-version"),
-    ("ASP.NET MVC",        "x-aspnetmvc-version"),
-    ("CDN / Proxy",        "via"),
-]
-
-_BODY_FINGERPRINTS = [
-    ("WordPress",   re.compile(r'wp-content/(?:themes|plugins)/[^/]+/([0-9.]+)', re.IGNORECASE)),
-    ("jQuery",      re.compile(r'jquery[/-]([0-9]+\.[0-9]+\.[0-9]+)(?:\.min)?\.js', re.IGNORECASE)),
-    ("React",       re.compile(r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)".*react', re.IGNORECASE)),
-    ("Angular",     re.compile(r'angular(?:\.min)?\.js.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Vue.js",      re.compile(r'vue(?:\.min)?\.js.*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Bootstrap",   re.compile(r'bootstrap(?:\.min)?\.(?:css|js).*?([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("PHP",         re.compile(r'PHP/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Drupal",      re.compile(r'Drupal\s+([0-9]+)', re.IGNORECASE)),
-    ("Django",      re.compile(r'Django/([0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Rails",       re.compile(r'Rails\s+([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("OpenSSL",     re.compile(r'OpenSSL/([0-9]+\.[0-9]+\.[0-9]+[a-z]?)', re.IGNORECASE)),
-    ("Apache",      re.compile(r'Apache/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("nginx",       re.compile(r'nginx/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Tomcat",      re.compile(r'Apache Tomcat/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Spring Boot", re.compile(r'Spring Boot ([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Express",     re.compile(r'Express/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Next.js",     re.compile(r'Next\.js/([0-9]+\.[0-9]+\.[0-9]+)', re.IGNORECASE)),
-    ("Laravel",     re.compile(r'laravel[/ ]([0-9]+\.[0-9]+)', re.IGNORECASE)),
-]
 
 
 def _get_state(target: str) -> dict:
@@ -75,7 +42,7 @@ def test(page: CrawlResult, client, config=None) -> List[Finding]:
         return []
 
     # Phase 1: accumulate fingerprints from every page
-    _collect_fingerprints(page, state["fingerprints"])
+    fingerprint_page(page, state["fingerprints"])
 
     # Phase 2: generate templates once — on the root page, after fingerprinting
     if state["queried"]:
@@ -112,16 +79,3 @@ def test(page: CrawlResult, client, config=None) -> List[Finding]:
         return []
 
 
-def _collect_fingerprints(page: CrawlResult, fingerprints: dict) -> None:
-    for label, header_name in _HEADER_FINGERPRINTS:
-        value = page.headers.get(header_name, "")
-        if value and label not in fingerprints:
-            fingerprints[label] = value
-
-    body = page.body or ""
-    for name, pattern in _BODY_FINGERPRINTS:
-        if name not in fingerprints:
-            m = pattern.search(body)
-            if m:
-                version = m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0)
-                fingerprints[name] = f"{name} {version}"

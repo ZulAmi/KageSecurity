@@ -40,7 +40,8 @@ class Crawler:
         self._include = list(config.include_patterns) if config and config.include_patterns else []
         self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
 
-        headers = {"User-Agent": "KageSec/0.1 Security Scanner"}
+        _ua = (getattr(config, "user_agent", None) or "KageSec/0.1 Security Scanner") if config else "KageSec/0.1 Security Scanner"
+        headers = {"User-Agent": _ua}
         cookies = {}
 
         if config:
@@ -56,12 +57,18 @@ class Crawler:
                 elif auth_type == "cookie":
                     cookies = config.auth.get("cookies", {})
 
+        _timeout = (getattr(config, "timeout", 10) or 10) if config else 10
+        _retries = getattr(config, "retries", 0) if config else 0
         self.client = httpx.Client(
             follow_redirects=True,
-            timeout=10,
+            timeout=_timeout,
             headers=headers,
             cookies=cookies,
+            transport=httpx.HTTPTransport(retries=_retries),
         )
+
+        if config and getattr(config, "follow_robots", False):
+            self._parse_robots()
 
     def crawl(self) -> List[CrawlResult]:
         results = []
@@ -95,8 +102,13 @@ class Crawler:
         forms = self._extract_forms(soup, url) if soup else []
         links = self._extract_links(soup, url) if soup else []
 
-        # Also discover API endpoints from JS files
-        if "javascript" in content_type:
+        # Gap 13: extract endpoints from JS files linked in HTML or from JS responses
+        if "html" in content_type and body:
+            js_endpoints = self._extract_js_bundle_endpoints(body, url)
+            for ep in js_endpoints:
+                if ep not in links:
+                    links.append(ep)
+        elif "javascript" in content_type and body:
             links += self._extract_api_endpoints_from_js(body, url)
 
         results.append(CrawlResult(
@@ -163,6 +175,20 @@ class Crawler:
                 pass
         return urls[:50]  # cap sitemap seed
 
+    def _extract_js_bundle_endpoints(self, html_body: str, base: str) -> List[str]:
+        """Gap 13 — fetch linked JS bundles, extract API endpoint URLs from them."""
+        try:
+            from scanner.core.js_extractor import crawl_js_endpoints
+            endpoints = crawl_js_endpoints(html_body, base, self.client, max_files=10)
+            same_origin = []
+            for ep in endpoints:
+                parsed = urlparse(ep)
+                if parsed.netloc == self.base_domain and _normalise_for_dedup(ep) not in self.visited:
+                    same_origin.append(ep)
+            return same_origin[:30]
+        except Exception:
+            return []
+
     def _extract_api_endpoints_from_js(self, js_body: str, base: str) -> List[str]:
         import re
         endpoints = []
@@ -172,6 +198,27 @@ class Crawler:
             if urlparse(url).netloc == self.base_domain:
                 endpoints.append(url)
         return endpoints[:20]
+
+    def _parse_robots(self) -> None:
+        """Parse robots.txt and add Disallow paths to the exclude list."""
+        try:
+            resp = self.client.get(urljoin(self.base_url, "/robots.txt"), timeout=5)
+            if resp.status_code != 200 or "Disallow" not in resp.text:
+                return
+            user_agent_section = False
+            for line in resp.text.splitlines():
+                line = line.strip()
+                if line.lower().startswith("user-agent:"):
+                    ua = line.split(":", 1)[1].strip()
+                    user_agent_section = ua in ("*", "KageSec")
+                elif user_agent_section and line.lower().startswith("disallow:"):
+                    path = line.split(":", 1)[1].strip()
+                    if path:
+                        pattern = self.base_url.rstrip("/") + path.rstrip("/") + "*"
+                        if pattern not in self._exclude:
+                            self._exclude.append(pattern)
+        except Exception:
+            pass
 
     def close(self):
         self.client.close()
