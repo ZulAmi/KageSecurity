@@ -38,7 +38,7 @@ def _make_raw_client(url: str) -> httpx.Client:
     return httpx.Client(
         http1=True,
         http2=False,
-        verify=False,
+        verify=False,  # nosec B501 — intentional: scanning targets with self-signed certs
         follow_redirects=False,
         timeout=10,
     )

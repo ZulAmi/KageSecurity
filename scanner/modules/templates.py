@@ -37,8 +37,13 @@ def _get_all_templates(config=None) -> list:
         if extra:
             extra_dirs = list(extra) if isinstance(extra, (list, tuple)) else [extra]
 
-    # Auto-include nuclei templates dir if it exists and not already listed
-    if os.path.isdir(_NUCLEI_TEMPLATES_DIR) and _NUCLEI_TEMPLATES_DIR not in extra_dirs:
+    # Only include the Nuclei community templates when:
+    # (a) AI key is set (AI selection keeps it fast), OR
+    # (b) caller explicitly passed --template-dirs pointing at it, OR
+    # (c) config has nuclei_templates=True
+    api_key = getattr(config, "api_key", None) if config else None
+    nuclei_opt_in = getattr(config, "nuclei_templates", False) if config else False
+    if (api_key or nuclei_opt_in) and os.path.isdir(_NUCLEI_TEMPLATES_DIR) and _NUCLEI_TEMPLATES_DIR not in extra_dirs:
         extra_dirs.append(_NUCLEI_TEMPLATES_DIR)
 
     cache_key = str(sorted(extra_dirs))

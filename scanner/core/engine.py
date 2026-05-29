@@ -19,9 +19,10 @@ from scanner.compliance.mapper import map_to_standards
 from scanner.ai.verifier import verify_findings
 from scanner.ai.reporter import generate_report
 
+import tempfile
 import scanner.modules as _modules_pkg
 
-_CHECKPOINT_DIR = "/tmp"
+_CHECKPOINT_DIR = tempfile.gettempdir()
 
 # ---------------------------------------------------------------------------
 # Speed: URL normalisation and content deduplication
@@ -365,7 +366,9 @@ def run_scan(
             pages = import_har(har_file)
             print(f"[*] HAR import: {len(pages)} requests loaded from {har_file}")
         else:
+            print("[*] Crawling target...", flush=True)
             pages = crawler.crawl()
+            print(f"[*] Crawl complete: {len(pages)} pages found", flush=True)
 
         # Append synthetic pages from OpenAPI/GraphQL specs
         if getattr(config, "openapi_spec", None):
@@ -428,7 +431,14 @@ def run_scan(
         _max_minutes = getattr(config, "max_time_minutes", 0)
         _deadline = (start + _max_minutes * 60) if _max_minutes > 0 else None
 
-        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
+        # Total time budget for all modules: 3 seconds per module per page,
+        # minimum 120 seconds. as_completed(timeout=N) raises TimeoutError when
+        # exceeded, so a handful of stuck modules can't hang the entire scan.
+        _module_budget = max(120, len(active_modules) * max(1, len(pages)) * 3)
+
+        executor = ThreadPoolExecutor(max_workers=max(1, concurrency))
+        _timed_out = False
+        try:
             futures = {
                 executor.submit(_run_module, module, page, client, oob, config): (module, page)
                 for page in pages
@@ -438,30 +448,48 @@ def run_scan(
             _total_work = len(futures)
             _done = 0
             _budget_exceeded = False
-            for future in as_completed(futures):
-                if _budget_exceeded:
-                    future.cancel()
-                    continue
-                module, page = futures[future]
-                try:
-                    findings = future.result(timeout=30)
-                    for f in findings:
-                        result.add_finding(f)
-                        if finding_callback:
-                            finding_callback(f)
-                    completed_pairs.add((page.url, module.__name__))
-                    _save_checkpoint(effective_id, completed_pairs)
-                except Exception as e:
-                    result.errors.append(f"{module.__name__}: {e}")
-                finally:
-                    _done += 1
-                    if progress_callback:
-                        progress_callback(_done, _total_work, len(result.findings))
-                    if _deadline and time.time() > _deadline:
-                        _budget_exceeded = True
-                        result.errors.append(
-                            f"[budget] Scan time budget of {_max_minutes}m exceeded — stopping early"
-                        )
+            try:
+                for future in as_completed(futures, timeout=_module_budget):
+                    if _budget_exceeded:
+                        future.cancel()
+                        continue
+                    module, page = futures[future]
+                    try:
+                        findings = future.result(timeout=30)
+                        for f in findings:
+                            result.add_finding(f)
+                            if finding_callback:
+                                finding_callback(f)
+                        completed_pairs.add((page.url, module.__name__))
+                        _save_checkpoint(effective_id, completed_pairs)
+                    except Exception as e:
+                        result.errors.append(f"{module.__name__}: {e}")
+                    finally:
+                        _done += 1
+                        if progress_callback:
+                            progress_callback(_done, _total_work, len(result.findings))
+                        if _deadline and time.time() > _deadline:
+                            _budget_exceeded = True
+                            result.errors.append(
+                                f"[budget] Scan time budget of {_max_minutes}m exceeded — stopping early"
+                            )
+            except TimeoutError:
+                stuck = {futures[f][0].__name__.split(".")[-1] for f in futures if not f.done()}
+                incomplete = len(stuck) if stuck else (_total_work - _done)
+                result.errors.append(
+                    f"[timeout] Module phase exceeded {_module_budget}s budget — "
+                    f"{incomplete} module(s) abandoned: {', '.join(sorted(stuck))}. Use --max-time to extend."
+                )
+                print(
+                    f"[!] Module timeout: {incomplete} slow module(s) abandoned after "
+                    f"{_module_budget}s: {', '.join(sorted(stuck))}",
+                    flush=True,
+                )
+                _timed_out = True
+        finally:
+            # cancel_futures=True drops queued-but-not-started work;
+            # wait=False avoids blocking on threads stuck in network I/O after timeout
+            executor.shutdown(wait=not _timed_out, cancel_futures=_timed_out)
 
         # Poll OOB for blind callbacks after all modules finish
         if oob:

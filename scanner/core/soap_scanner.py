@@ -140,7 +140,7 @@ def scan_wsdl(
 def _parse_wsdl(wsdl_text: str, wsdl_url: str) -> List[WsdlOperation]:
     ops = []
     try:
-        root = ET.fromstring(wsdl_text)
+        root = ET.fromstring(wsdl_text)  # nosec B314 — Python 3.8+ ET ignores external entities
     except ET.ParseError:
         return ops
 

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/kagesec/kagesec
+  repository: ghcr.io/zulami/kagesecurity
   tag: latest
   pullPolicy: Always
 

@@ -106,8 +106,13 @@ def crawl_js_endpoints(
 
     for js_url in js_files:
         try:
-            resp = client.get(js_url, timeout=10)
-            if resp.status_code == 200 and "javascript" in resp.headers.get("content-type", "text/javascript"):
+            resp = client.get(js_url, timeout=5)
+            if resp.status_code != 200:
+                continue
+            # Skip large bundles — minified SPAs can be several MB and take forever
+            if len(resp.content) > 512_000:
+                continue
+            if "javascript" in resp.headers.get("content-type", "text/javascript"):
                 for ep in extract_endpoints(resp.text, base_url):
                     all_endpoints.add(ep)
         except Exception:

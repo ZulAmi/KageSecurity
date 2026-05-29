@@ -2,12 +2,18 @@ import os
 import sys
 import json
 import argparse
+import tempfile
 import threading
 import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scanner.core.engine import run_scan
 from scanner.core.config import ScanConfig, LoginFlow
 from scanner.core import policy as _policy
+
+# Force line-buffered stdout so output appears immediately when redirected
+# (e.g. piped to a file, run in CI, or captured by a background task runner)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 
 def main():
@@ -34,7 +40,7 @@ def main():
             "Report format(s) to generate. "
             "'json' — machine-readable (default); "
             "'markdown' — human-readable text report; "
-            "'pdf' — professional PDF report (requires playwright + jinja2); "
+            "'pdf' — professional PDF report (requires: pip install \"kagesec[pdf]\" && playwright install chromium); "
             "'sarif' — SARIF 2.1.0 for GitHub Code Scanning / VS Code; "
             "'burp' — Burp Suite XML issue import format; "
             "'zap' — OWASP ZAP JSON alert format; "
@@ -81,7 +87,8 @@ def main():
         "--fail-on", choices=["critical", "high", "medium", "low"],
         help="Exit with code 1 if findings at this severity or above are found (CI/CD mode)",
     )
-    scan_cmd.add_argument("--browser", action="store_true", help="Use Playwright headless browser (SPAs, JS content)")
+    scan_cmd.add_argument("--browser", action="store_true", default=True, help="Use Playwright headless browser (SPAs, JS content) [default: on]")
+    scan_cmd.add_argument("--no-browser", action="store_false", dest="browser", help="Disable Playwright browser (faster, but misses JS-rendered content)")
     scan_cmd.add_argument("--login-url", metavar="URL", help="Login page URL for authenticated scanning")
     scan_cmd.add_argument("--login-user-selector", metavar="CSS", help="CSS selector for username field")
     scan_cmd.add_argument("--login-pass-selector", metavar="CSS", help="CSS selector for password field")
@@ -104,6 +111,7 @@ def main():
     scan_cmd.add_argument("--nvd-api-key", metavar="KEY", help="NVD API key for CVE enrichment")
     scan_cmd.add_argument("--templates", nargs="+", metavar="DIR", help="Extra YAML template directories")
     scan_cmd.add_argument("--skip-templates", action="store_true", help="Disable built-in YAML template scanning")
+    scan_cmd.add_argument("--nuclei-templates", action="store_true", help="Include Nuclei community templates (~10k templates, slow without --api-key)")
     scan_cmd.add_argument(
         "--parallel", type=int, default=1, metavar="N",
         help="Number of targets to scan concurrently when using --targets (default: 1 = sequential)",
@@ -363,6 +371,8 @@ def main():
 
     args = parser.parse_args()
 
+    _print_disclaimer()
+
     if not args.command:
         parser.print_help()
         sys.exit(0)
@@ -434,6 +444,19 @@ def main():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _print_disclaimer() -> None:
+    print(
+        "\n"
+        "  KageSec — Authorized Security Testing Only\n"
+        "  -------------------------------------------\n"
+        "  This tool actively probes targets with attack payloads.\n"
+        "  Use it ONLY on systems you own or have explicit written permission to test.\n"
+        "  Unauthorized scanning may violate the CFAA, Computer Misuse Act, and\n"
+        "  equivalent laws in your jurisdiction. The authors accept no liability\n"
+        "  for misuse. By proceeding you confirm you are authorized to test this target.\n"
+    )
+
 
 def _resolve_targets(args) -> list[str]:
     if getattr(args, "targets", None):
@@ -536,6 +559,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         resume_scan_id=args.resume,
         nvd_api_key=args.nvd_api_key,
         template_dirs=args.templates or [],
+        nuclei_templates=getattr(args, "nuclei_templates", False),
         proxy=getattr(args, "proxy", None),
         passive=getattr(args, "passive", False),
         follow_robots=getattr(args, "follow_robots", False),
@@ -723,35 +747,41 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     # SOAP/WSDL scan (if --wsdl provided) — runs after the main scan
     wsdl_url = getattr(args, "wsdl", None)
     if wsdl_url:
-        from scanner.core.soap_scanner import scan_wsdl
-        import httpx as _httpx
-        print(f"\n[*] SOAP/WSDL scan: {wsdl_url}")
-        _soap_proxies = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
-        with _httpx.Client(follow_redirects=True, timeout=15, verify=False, proxies=_soap_proxies) as _soap_client:
-            soap_findings = scan_wsdl(wsdl_url, _soap_client, config)
-        if soap_findings:
-            print(f"[+] SOAP findings: {len(soap_findings)}")
-            result.findings.extend(soap_findings)
-            for f in soap_findings:
-                if finding_callback:
-                    finding_callback(f)
-        else:
-            print("[+] SOAP scan: no issues found")
+        try:
+            from scanner.core.soap_scanner import scan_wsdl
+            import httpx as _httpx
+            print(f"\n[*] SOAP/WSDL scan: {wsdl_url}")
+            _soap_proxies = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
+            with _httpx.Client(follow_redirects=True, timeout=15, verify=False, proxies=_soap_proxies) as _soap_client:  # nosec B501
+                soap_findings = scan_wsdl(wsdl_url, _soap_client, config)
+            if soap_findings:
+                print(f"[+] SOAP findings: {len(soap_findings)}")
+                result.findings.extend(soap_findings)
+                for f in soap_findings:
+                    if finding_callback:
+                        finding_callback(f)
+            else:
+                print("[+] SOAP scan: no issues found")
+        except Exception as e:
+            print(f"[!] SOAP/WSDL scan failed: {e}")
 
     # gRPC scan (if requested) — runs after the main scan
     grpc_endpoint = getattr(args, "grpc", None)
     if grpc_endpoint:
-        from scanner.core.grpc_scanner import scan_grpc
-        print(f"\n[*] gRPC scan: {grpc_endpoint}")
-        grpc_result = scan_grpc(grpc_endpoint, config)
-        if grpc_result.error:
-            print(f"[!] gRPC: {grpc_result.error}")
-        else:
-            print(f"[+] gRPC services: {len(grpc_result.services)}  methods: {len(grpc_result.methods)}")
-            result.findings.extend(grpc_result.findings)
-            for f in grpc_result.findings:
-                if finding_callback:
-                    finding_callback(f)
+        try:
+            from scanner.core.grpc_scanner import scan_grpc
+            print(f"\n[*] gRPC scan: {grpc_endpoint}")
+            grpc_result = scan_grpc(grpc_endpoint, config)
+            if grpc_result.error:
+                print(f"[!] gRPC: {grpc_result.error}")
+            else:
+                print(f"[+] gRPC services: {len(grpc_result.services)}  methods: {len(grpc_result.methods)}")
+                result.findings.extend(grpc_result.findings)
+                for f in grpc_result.findings:
+                    if finding_callback:
+                        finding_callback(f)
+        except Exception as e:
+            print(f"[!] gRPC scan failed: {e}")
 
     summary = result.summary()
     dur = summary['duration_seconds']
@@ -797,15 +827,29 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
 
 
 def _write_reports(args, result, report_md, slug: str) -> None:
+    import os
+    reports_dir = "reports"
+    os.makedirs(reports_dir, exist_ok=True)
+
+    def _rpath(filename: str) -> str:
+        return os.path.join(reports_dir, filename)
+
     if args.output in ("json", "all"):
-        path = f"kagesec_report{slug}.json"
-        out = _findings_dict(result)
-        with open(path, "w") as fp:
-            json.dump(out, fp, indent=2)
-        print(f"\n[+] JSON report:     {path}")
+        path = _rpath(f"kagesec_report{slug}.json")
+        try:
+            out = _findings_dict(result)
+            with open(path, "w") as fp:
+                # default=str converts any non-serializable value (e.g. set, Enum)
+                # to its string representation rather than crashing
+                json.dump(out, fp, indent=2, default=str)
+            print(f"\n[+] JSON report:     {path}")
+        except Exception as e:
+            print(f"\n[!] Failed to write JSON report ({path}): {e}")
+            import traceback
+            traceback.print_exc()
 
     if report_md and args.output in ("markdown", "all"):
-        path = f"kagesec_report{slug}.md"
+        path = _rpath(f"kagesec_report{slug}.md")
         with open(path, "w") as fp:
             fp.write(report_md)
         print(f"[+] Markdown report: {path}")
@@ -813,7 +857,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
     if args.output in ("sarif", "all"):
         try:
             from scanner.reporters.sarif_reporter import generate_sarif
-            sarif_path = generate_sarif(result, f"kagesec_report{slug}.sarif")
+            sarif_path = generate_sarif(result, _rpath(f"kagesec_report{slug}.sarif"))
             print(f"[+] SARIF report:    {sarif_path}")
         except Exception as e:
             print(f"[!] SARIF generation failed: {e}")
@@ -823,7 +867,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
             from scanner.reporters.pdf_reporter import generate_pdf
             _auth_type, _auth_value = _auth_display(args)
             pdf_path = generate_pdf(
-                result, f"kagesec_report{slug}.pdf",
+                result, _rpath(f"kagesec_report{slug}.pdf"),
                 auth_type=_auth_type,
                 auth_value=_auth_value,
             )
@@ -834,7 +878,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
     if args.output in ("burp", "all"):
         try:
             from scanner.reporters.burp_reporter import generate_burp
-            burp_path = generate_burp(result, f"kagesec_report{slug}.xml")
+            burp_path = generate_burp(result, _rpath(f"kagesec_report{slug}.xml"))
             print(f"[+] Burp XML report: {burp_path}")
         except Exception as e:
             print(f"[!] Burp export failed: {e}")
@@ -842,7 +886,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
     if args.output in ("zap", "all"):
         try:
             from scanner.reporters.zap_reporter import generate_zap
-            zap_path = generate_zap(result, f"kagesec_report{slug}_zap.json")
+            zap_path = generate_zap(result, _rpath(f"kagesec_report{slug}_zap.json"))
             print(f"[+] ZAP JSON report: {zap_path}")
         except Exception as e:
             print(f"[!] ZAP export failed: {e}")
@@ -1070,7 +1114,7 @@ def _export_scan(scan_id: str, report_path: str, out_path: str) -> None:
     """
     import zipfile
 
-    checkpoint = f"/tmp/kagesec_{scan_id}.json"
+    checkpoint = os.path.join(tempfile.gettempdir(), f"kagesec_{scan_id}.json")
     if not os.path.exists(checkpoint):
         print(f"[!] Checkpoint not found: {checkpoint}")
         print(f"    Make sure scan_id '{scan_id}' was run on this machine.")
@@ -1125,7 +1169,7 @@ def _import_scan(zip_path: str) -> None:
             # Restore checkpoint
             checkpoint_name = f"kagesec_{scan_id}.json"
             if checkpoint_name in names:
-                dest = f"/tmp/{checkpoint_name}"
+                dest = os.path.join(tempfile.gettempdir(), checkpoint_name)
                 with open(dest, "wb") as f:
                     f.write(zf.read(checkpoint_name))
                 print(f"[+] Checkpoint restored to: {dest}")
@@ -1395,7 +1439,7 @@ def _run_retest(args) -> None:
     config = ScanConfig(target=base_target, max_depth=1, max_pages=1)
     config.api_key = api_key if not getattr(args, "no_ai", False) else None
 
-    with httpx.Client(follow_redirects=True, timeout=15, verify=False) as client:
+    with httpx.Client(follow_redirects=True, timeout=15, verify=False) as client:  # nosec B501
         try:
             resp = client.get(url, timeout=10)
             from bs4 import BeautifulSoup

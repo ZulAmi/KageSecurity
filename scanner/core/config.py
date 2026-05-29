@@ -36,6 +36,7 @@ class ScanConfig:
     resume_scan_id: Optional[str] = None
     nvd_api_key: Optional[str] = None
     template_dirs: Optional[List[str]] = None
+    nuclei_templates: bool = False             # Include ~10k Nuclei community templates (slow without AI key)
     api_key: Optional[str] = None
     proxy: Optional[str] = None              # HTTP/HTTPS proxy URL (e.g. http://127.0.0.1:8080)
     passive: bool = False                    # Passive mode — no injection, headers/cookies/content only

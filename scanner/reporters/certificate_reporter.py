@@ -157,7 +157,7 @@ def generate_certificate(
 
     compliance_standards = [cr.standard for cr in scan_result.compliance_reports if cr.score >= 70]
 
-    env = Environment()
+    env = Environment(autoescape=True)
     template = env.from_string(_CERTIFICATE_TEMPLATE)
     html = template.render(
         target=scan_result.target,

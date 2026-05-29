@@ -9,9 +9,9 @@ keywords:
   - dast
   - scanning
   - appsec
-home: https://github.com/kagesec/kagesec
+home: https://github.com/ZulAmi/KageSecurity
 sources:
-  - https://github.com/kagesec/kagesec
+  - https://github.com/ZulAmi/KageSecurity
 maintainers:
   - name: KageSec
-    url: https://github.com/kagesec/kagesec
+    url: https://github.com/ZulAmi/KageSecurity

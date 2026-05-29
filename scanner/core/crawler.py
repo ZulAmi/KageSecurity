@@ -179,7 +179,7 @@ class Crawler:
         """Gap 13 — fetch linked JS bundles, extract API endpoint URLs from them."""
         try:
             from scanner.core.js_extractor import crawl_js_endpoints
-            endpoints = crawl_js_endpoints(html_body, base, self.client, max_files=10)
+            endpoints = crawl_js_endpoints(html_body, base, self.client, max_files=3)
             same_origin = []
             for ep in endpoints:
                 parsed = urlparse(ep)

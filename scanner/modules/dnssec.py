@@ -34,6 +34,8 @@ def _check_with_dnspython(domain: str) -> List[Finding]:
     # Check DNSSEC: query for DNSKEY record with DO bit
     try:
         resolver = dns.resolver.Resolver()
+        resolver.lifetime = 5  # total query budget in seconds
+        resolver.timeout = 3   # per-nameserver timeout
         resolver.use_edns(0, dns.flags.DO, 4096)
         try:
             resolver.resolve(domain, "DNSKEY")

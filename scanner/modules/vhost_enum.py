@@ -70,43 +70,59 @@ def _load_subdomains(config) -> List[str]:
     return []
 
 
+def _resolve(fqdn: str) -> Optional[str]:
+    """Return IP for fqdn or None. Run in a thread so we can apply a timeout."""
+    try:
+        return socket.gethostbyname(fqdn)
+    except Exception:
+        return None
+
+
 def _dns_enum(domain: str, subdomains: List[str], scheme: str, findings: List[Finding]):
-    """Resolve each subdomain via DNS."""
+    """Resolve each subdomain via DNS, with a 5s per-lookup timeout."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _ac
     parts = domain.split(".")
-    # Use the root domain (last two parts for most TLDs)
     root = ".".join(parts[-2:]) if len(parts) >= 2 else domain
 
-    for sub in subdomains:
-        fqdn = f"{sub}.{root}"
+    fqdns = [f"{sub}.{root}" for sub in subdomains]
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        fut_map = {ex.submit(_resolve, fqdn): fqdn for fqdn in fqdns}
         try:
-            ip = socket.gethostbyname(fqdn)
-        except socket.gaierror:
-            continue
+            for fut in _ac(fut_map, timeout=30):
+                fqdn = fut_map[fut]
+                try:
+                    ip = fut.result()
+                except Exception:
+                    continue
+                if not ip:
+                    continue
 
-        findings.append(Finding(
-            title=f"Subdomain Discovered — {fqdn}",
-            severity=Severity.INFO,
-            url=f"{scheme}://{fqdn}",
-            parameter=None,
-            payload=fqdn,
-            evidence=f"DNS resolution: {fqdn} → {ip}",
-            description=(
-                f"The subdomain '{fqdn}' resolves to {ip}. "
-                "Subdomains with weaker security posture can be an entry point into the "
-                "main application's environment (e.g., staging/dev with debug mode enabled, "
-                "admin panels, internal APIs)."
-            ),
-            remediation=(
-                "Audit all subdomains for security configuration. "
-                "Restrict access to internal/development subdomains by IP allowlist. "
-                "Implement consistent security headers and TLS across all subdomains. "
-                "Monitor for subdomain takeover (dangling CNAME records)."
-            ),
-            cwe="CWE-200",
-            cvss=3.7,
-            owasp_category="A05:2021 Security Misconfiguration",
-            confidence=1.0,
-        ))
+                findings.append(Finding(
+                    title=f"Subdomain Discovered — {fqdn}",
+                    severity=Severity.INFO,
+                    url=f"{scheme}://{fqdn}",
+                    parameter=None,
+                    payload=fqdn,
+                    evidence=f"DNS resolution: {fqdn} → {ip}",
+                    description=(
+                        f"The subdomain '{fqdn}' resolves to {ip}. "
+                        "Subdomains with weaker security posture can be an entry point into the "
+                        "main application's environment (e.g., staging/dev with debug mode enabled, "
+                        "admin panels, internal APIs)."
+                    ),
+                    remediation=(
+                        "Audit all subdomains for security configuration. "
+                        "Restrict access to internal/development subdomains by IP allowlist. "
+                        "Implement consistent security headers and TLS across all subdomains. "
+                        "Monitor for subdomain takeover (dangling CNAME records)."
+                    ),
+                    cwe="CWE-200",
+                    cvss=3.7,
+                    owasp_category="A05:2021 Security Misconfiguration",
+                    confidence=1.0,
+                ))
+        except Exception:
+            pass
 
 
 def _vhost_enum(base_url: str, domain: str, subdomains: List[str], client: httpx.Client, findings: List[Finding]):

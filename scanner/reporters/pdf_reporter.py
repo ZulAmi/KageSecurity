@@ -777,7 +777,7 @@ def generate_pdf(
 
     proxies = [_Proxy(f) for f in active]
 
-    env = Environment()
+    env = Environment(autoescape=True)
     env.globals["sev_color"] = _sev_color
     env.globals["sev_bg"]    = _sev_bg
     template = env.from_string(_HTML_TEMPLATE)

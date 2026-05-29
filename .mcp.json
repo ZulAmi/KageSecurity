@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kagesec": {
+      "command": "python3",
+      "args": ["-m", "scanner.mcp_server"],
+      "cwd": "/Users/zulhilmirahmat/Development/Programming/Personal/KageSec"
+    }
+  }
+}

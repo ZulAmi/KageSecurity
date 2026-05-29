@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY . .
 
-RUN pip install --no-cache-dir -e ".[full]" \
+RUN pip install --no-cache-dir -e ".[all]" \
     && playwright install chromium --with-deps
 
 ENTRYPOINT ["kagesec"]

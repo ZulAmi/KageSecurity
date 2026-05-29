@@ -32,9 +32,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zulhilmirahmat/kagesec"
-Repository = "https://github.com/zulhilmirahmat/kagesec"
-"Bug Tracker" = "https://github.com/zulhilmirahmat/kagesec/issues"
+Homepage = "https://github.com/ZulAmi/KageSecurity"
+Repository = "https://github.com/ZulAmi/KageSecurity"
+"Bug Tracker" = "https://github.com/ZulAmi/KageSecurity/issues"
 
 [project.scripts]
 kagesec = "cli.main:main"
@@ -59,11 +59,15 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
 ]
+claude = [
+    "mcp>=1.0",
+]
 all = [
     "playwright>=1.44",
     "pyotp>=2.9",
     "websockets>=12.0",
     "dnspython>=2.6",
+    "mcp>=1.0",
 ]
 
 [tool.setuptools.packages.find]
