@@ -410,20 +410,36 @@ This is not a substitute for a full compliance audit or a real auditor. It gives
 
 ### GitHub Actions
 
-```yaml
-- name: KageSec Security Scan
-  uses: ZulAmi/KageSecurity@main
-  with:
-    target: https://staging.example.com
-    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-    fail-on: high
-    output: sarif
+Create `.github/workflows/security-scan.yml` in **your own repo**:
 
-- name: Upload SARIF to GitHub Security
-  uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: reports/kagesec_report.sarif
+```yaml
+name: Security Scan
+on:
+  push:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: KageSec Security Scan
+        uses: ZulAmi/KageSecurity@main
+        with:
+          target: https://staging.example.com
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          fail-on: high
+          output: sarif
+
+      - name: Upload to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: reports/kagesec_report.sarif
 ```
+
+Full examples (GitHub Actions + GitLab CI) are in the [`ci/`](ci/) folder.
 
 ### Break the build if something is actually bad
 
