@@ -4,7 +4,6 @@ SARIF 2.1.0 exporter for GitHub Code Scanning / VS Code SARIF Viewer.
 from __future__ import annotations
 
 import json
-from typing import Optional
 from scanner.core.scan_result import ScanResult, Finding, Severity
 
 _SARIF_VERSION = "2.1.0"
@@ -81,7 +80,7 @@ def _build_rule(rule_id: str, finding: Finding) -> dict:
         "name": finding.title,
         "shortDescription": {"text": finding.title},
         "fullDescription": {"text": finding.description or finding.title},
-        "helpUri": f"https://owasp.org/www-project-top-ten/",
+        "helpUri": "https://owasp.org/www-project-top-ten/",
         "properties": {
             "tags": [finding.owasp_category or "security"],
             "precision": "high" if (finding.confidence or 0) >= 0.8 else "medium",

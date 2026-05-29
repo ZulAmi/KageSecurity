@@ -67,7 +67,6 @@ def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
 
     # Test URL params where value looks like XML or param name hints at XML
     xml_hint_params = {"xml", "data", "body", "payload", "input", "query", "request", "content"}
-    from scanner.utils.http import get_url_params
     params = get_url_params(page.url)
     for param_name in params:
         if param_name.lower() not in xml_hint_params:

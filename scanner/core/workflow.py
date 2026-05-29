@@ -56,10 +56,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from scanner.core.scan_result import Finding, ScanResult
+    from scanner.core.scan_result import ScanResult
     from scanner.core.config import ScanConfig
 
 _BUILTIN_WORKFLOWS_DIR = os.path.join(os.path.dirname(__file__), "..", "workflows")
@@ -181,7 +181,7 @@ def evaluate_condition(
 
     # Arbitrary Python expression
     try:
-        result = eval(  # noqa: S307
+        result = eval(  # noqa: S307  # nosec B307
             condition,
             {"__builtins__": {}},
             {"findings": findings, "fingerprints": fingerprints, "len": len},
@@ -210,7 +210,6 @@ def run_workflow(
     """
     import copy
     from scanner.core.engine import run_scan
-    from scanner.core.scan_result import ScanResult
 
     all_findings: list = []
     fingerprints: dict = {}

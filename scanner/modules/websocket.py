@@ -88,7 +88,7 @@ def _test_origin_validation(ws_url: str, page_url: str, findings: List[Finding])
         import websockets.sync.client as _ws_sync  # websockets >= 13
     except ImportError:
         try:
-            import websockets  # websockets < 13
+            import websockets  # websockets < 13  # noqa: F401
             _ws_sync = None
         except ImportError:
             return
@@ -176,7 +176,7 @@ def _test_message_injection(
         import websockets.sync.client as _ws_sync
     except ImportError:
         try:
-            import websockets  # older API
+            import websockets  # older API  # noqa: F401
             _ws_sync = None
         except ImportError:
             return

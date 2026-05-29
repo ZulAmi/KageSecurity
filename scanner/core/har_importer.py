@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import base64
 from typing import List
-from urllib.parse import urlparse, urlencode, parse_qs
+from urllib.parse import urlparse, parse_qs
 
 from scanner.core.crawler import CrawlResult
 
@@ -100,7 +100,6 @@ def _entry_to_crawl_result(entry: dict) -> CrawlResult | None:
     # POST body params
     post_data = req.get("postData", {})
     if post_data:
-        post_mime = post_data.get("mimeType", "")
         post_params = post_data.get("params", [])
         if post_params:
             forms.append({

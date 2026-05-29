@@ -87,7 +87,7 @@ def test(page: CrawlResult, client) -> List[Finding]:
         payload=None,
         evidence=(
             f"Content-Encoding: {encoding} | Secret token in body: {secret_found}"
-            + (f" | Query param reflected in body (oracle confirmed)" if reflection_confirmed else "")
+            + (" | Query param reflected in body (oracle confirmed)" if reflection_confirmed else "")
         ),
         description=(
             "The BREACH attack (CVE-2013-3587) allows an active network attacker to recover "

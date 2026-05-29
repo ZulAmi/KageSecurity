@@ -282,7 +282,7 @@ def main():
 
     # ------------------------------------------------------------------ serve
     serve_cmd = sub.add_parser("serve", help="Start KageSec as an HTTP API server")
-    serve_cmd.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve_cmd.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")  # nosec B104
     serve_cmd.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
 
     # ------------------------------------------------------------------ export
@@ -462,7 +462,7 @@ def _resolve_targets(args) -> list[str]:
     if getattr(args, "targets", None):
         try:
             with open(args.targets) as f:
-                lines = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+                lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
             return lines
         except FileNotFoundError:
             print(f"[!] Targets file not found: {args.targets}")
@@ -1249,7 +1249,7 @@ def _run_history(args) -> None:
         print(f"[+] Scans run:              {summary['scans_run']}")
         print(f"[+] Unique findings total:  {summary['total_unique_findings']}")
         print(f"[+] Persisting (multi-scan):{summary['persisting_across_scans']}")
-        print(f"[+] By severity:")
+        print("[+] By severity:")
         for sev, count in summary["by_severity"].items():
             if count:
                 print(f"    {sev.upper():<12} {count}")
@@ -1392,7 +1392,7 @@ def _run_retest(args) -> None:
     param = target_finding.get("parameter", "")
     payload = target_finding.get("payload", "")
 
-    print(f"[*] Retesting finding:")
+    print("[*] Retesting finding:")
     print(f"    Title:     {title}")
     print(f"    Severity:  {severity.upper()}")
     print(f"    URL:       {url}")
@@ -1488,13 +1488,13 @@ def _run_retest(args) -> None:
 
     # Report results
     if not new_findings:
-        print(f"\n[+] RESOLVED — Finding no longer detected.")
-        print(f"    The vulnerability may have been fixed or requires specific conditions.")
+        print("\n[+] RESOLVED — Finding no longer detected.")
+        print("    The vulnerability may have been fixed or requires specific conditions.")
         sys.exit(0)
 
     matched = [f for f in new_findings if title_lower[:30] in f.title.lower()]
     if matched:
-        print(f"\n[!] STILL VULNERABLE — Finding confirmed active.")
+        print("\n[!] STILL VULNERABLE — Finding confirmed active.")
         for f in matched:
             print(f"    [{f.severity.value.upper():<8}] {f.title}")
             print(f"    URL: {f.url}")
@@ -1596,7 +1596,7 @@ def _update_templates(dest_dir: str, keep_all: bool = False) -> None:
             NUCLEI_ZIP,
             headers={"User-Agent": "KageSec/1.0 template-updater"},
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
             data = resp.read()
         print(f"[+] Downloaded {len(data) // 1_048_576} MB")
 
@@ -1648,7 +1648,7 @@ def _update_templates(dest_dir: str, keep_all: bool = False) -> None:
         print()
         print(f"[+] Templates saved to: {dest_dir}")
         print(f"[+] Use them: kagesec scan <target> --templates {dest_dir}")
-        print(f"[+] Or make permanent: add to ~/.kagesec/config.yaml  (coming soon)")
+        print("[+] Or make permanent: add to ~/.kagesec/config.yaml  (coming soon)")
 
     except urllib.error.URLError as e:
         print(f"[!] Network error: {e}")

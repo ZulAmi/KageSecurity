@@ -8,7 +8,6 @@ registration), the subdomain may be takeable by an attacker.
 Runs once per unique domain discovered from page links.
 """
 import re
-import socket
 from urllib.parse import urlparse
 from typing import List
 from scanner.core.crawler import CrawlResult

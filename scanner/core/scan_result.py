@@ -53,7 +53,7 @@ class Finding:
             parts.append(f"--data '{self.payload}'")
         url = self.url
         if self.parameter and self.payload and method.upper() == "GET":
-            from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
+            from urllib.parse import urlparse, urlunparse, parse_qs
             parsed = urlparse(url)
             qs = parse_qs(parsed.query)
             qs[self.parameter] = [self.payload]

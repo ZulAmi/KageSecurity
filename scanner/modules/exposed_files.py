@@ -141,7 +141,6 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         ct = resp.headers.get("content-type", "").lower()
 
         # Binary file extensions must not be served as text/html
-        ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
         if any(path.endswith(be) for be in _BINARY_EXTS) and "text/html" in ct:
             continue
 

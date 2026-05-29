@@ -24,7 +24,7 @@ import hashlib
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 _STATE_DIR = os.path.expanduser("~/.kagesec/crawl_state")
 

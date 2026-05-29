@@ -12,9 +12,8 @@ Burp Sequencer equivalent for KageSec.
 """
 import math
 import re
-import time
 import httpx
-from typing import List, Optional
+from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 
@@ -47,7 +46,6 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
 
 def _has_session_endpoint(page: CrawlResult) -> bool:
     """Heuristic: page set a session-like cookie."""
-    body_lower = (page.body or "").lower()
     return (
         any(k.lower() in _SESSION_COOKIE_NAMES for k in page.headers.keys())
         or "set-cookie" in {k.lower() for k in page.headers.keys()}

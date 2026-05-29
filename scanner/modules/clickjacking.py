@@ -13,7 +13,6 @@ or misconfigured, since either alone is sufficient protection on modern browsers
 from __future__ import annotations
 
 from typing import List
-from urllib.parse import urlparse
 
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity

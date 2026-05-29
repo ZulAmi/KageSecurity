@@ -15,7 +15,7 @@ Attack classes:
 """
 import re
 import httpx
-from typing import List, Optional
+from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 

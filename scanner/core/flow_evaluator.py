@@ -168,7 +168,7 @@ def run_flow(
     py_script = _js_to_python(flow_script)
 
     try:
-        exec(py_script, safe_globals)  # noqa: S102
+        exec(py_script, safe_globals)  # noqa: S102  # nosec B102
     except _StopFlow:
         pass
     except Exception:

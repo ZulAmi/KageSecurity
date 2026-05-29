@@ -161,7 +161,7 @@ def _check_body(url: str, body: str, status_code: int) -> List[Finding]:
 def _probe_error_pages(page: CrawlResult, client) -> List[Finding]:
     """Send a request with junk params to try to trigger a verbose error."""
     findings = []
-    from urllib.parse import urlparse, urlencode, urlunparse
+    from urllib.parse import urlparse, urlunparse
 
     parsed = urlparse(page.url)
     # Only probe HTML pages, skip assets

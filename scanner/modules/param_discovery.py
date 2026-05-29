@@ -17,7 +17,7 @@ import os
 import yaml
 import httpx
 from typing import List
-from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
+from urllib.parse import urlparse, urlunparse, parse_qs
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 

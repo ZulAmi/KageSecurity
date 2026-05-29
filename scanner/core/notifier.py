@@ -14,9 +14,8 @@ CLI flags:
 """
 from __future__ import annotations
 
-import json
 import httpx
-from typing import Optional, Callable
+from typing import Optional
 from scanner.core.scan_result import Finding, Severity
 
 _SEVERITY_RANK = {

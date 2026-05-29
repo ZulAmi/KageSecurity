@@ -46,7 +46,7 @@ _WAF_SIGNATURES: list[tuple[str, str, str]] = [
 
 
 def test(page: CrawlResult, client) -> List[Finding]:
-    from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
+    from urllib.parse import urlparse, parse_qs
     parsed = urlparse(page.url)
 
     # Need at least one query param to inject into; fabricate one if none

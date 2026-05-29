@@ -36,8 +36,8 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
                     "malicious code can be injected into your page without detection."
                 ),
                 remediation=(
-                    f"Generate an SRI hash for the resource and add `integrity` and `crossorigin` attributes. "
-                    f"Use: https://www.srihash.org/"
+                    "Generate an SRI hash for the resource and add `integrity` and `crossorigin` attributes. "
+                    "Use: https://www.srihash.org/"
                 ),
                 cwe="CWE-353",
                 cvss=4.3,

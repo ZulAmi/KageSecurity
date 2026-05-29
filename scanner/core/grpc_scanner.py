@@ -37,11 +37,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scanner.core.config import ScanConfig
-    from scanner.core.scan_result import Finding
 
 _GRPC_AVAILABLE = False
 try:
@@ -59,7 +58,7 @@ except ImportError:
 
 _PROTO_AVAILABLE = False
 try:
-    from google.protobuf import descriptor_pb2, symbol_database  # type: ignore
+    from google.protobuf import descriptor_pb2, symbol_database  # type: ignore  # noqa: F401
     _PROTO_AVAILABLE = True
 except ImportError:
     pass

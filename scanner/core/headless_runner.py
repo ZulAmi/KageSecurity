@@ -41,8 +41,8 @@ Matchers on headless templates check the final page source / URL.
 """
 from __future__ import annotations
 
-import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -197,7 +197,7 @@ def run_headless(
                             template.variables[var_name] = val
 
                 elif action == "screenshot":
-                    path = args.get("path", f"/tmp/kagesec_headless_{template.id}.png")
+                    path = args.get("path", f"{tempfile.gettempdir()}/kagesec_headless_{template.id}.png")
                     page.screenshot(path=path)
                     result["screenshot"] = path
 

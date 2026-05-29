@@ -24,7 +24,6 @@ import json
 import os
 import sys
 import subprocess
-from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 

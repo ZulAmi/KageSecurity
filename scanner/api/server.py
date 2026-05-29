@@ -207,14 +207,14 @@ def _run_scan_thread(scan_id: str, cfg: dict) -> None:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
+def serve(host: str = "0.0.0.0", port: int = 8080) -> None:  # nosec B104
     """Start the blocking HTTP server. Call from CLI."""
     httpd = HTTPServer((host, port), _Handler)
     print(f"[+] KageSec API server listening on http://{host}:{port}")
-    print(f"    POST /v1/scan          {{\"target\": \"https://example.com\", ...}}")
-    print(f"    GET  /v1/scan/{{id}}    status + live counters")
-    print(f"    GET  /v1/scan/{{id}}/report  full findings (when complete)")
-    print(f"    GET  /v1/health        liveness check")
+    print("    POST /v1/scan          {\"target\": \"https://example.com\", ...}")
+    print("    GET  /v1/scan/{id}    status + live counters")
+    print("    GET  /v1/scan/{id}/report  full findings (when complete)")
+    print("    GET  /v1/health        liveness check")
     print()
     try:
         httpd.serve_forever()

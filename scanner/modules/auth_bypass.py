@@ -31,7 +31,6 @@ _MIN_BODY_SIZE = 200  # ignore stub/empty pages
 
 def test(page: CrawlResult, client) -> List[Finding]:
     # Only meaningful when scan was run with auth credentials
-    config = getattr(client, "_config", None) or getattr(getattr(client, "_client", None), "_config", None)
     has_auth = _has_auth(client)
     if not has_auth:
         return []

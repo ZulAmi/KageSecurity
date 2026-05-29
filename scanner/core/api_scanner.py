@@ -3,9 +3,8 @@ Parses OpenAPI 3.x/Swagger 2.x specs and GraphQL introspection to produce
 CrawlResult pages that feed directly into the existing module pipeline.
 """
 import json
-import re
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse, urlencode
+from urllib.parse import urljoin, urlparse
 
 import httpx
 

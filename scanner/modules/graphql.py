@@ -1,4 +1,3 @@
-import json
 import httpx
 from typing import List
 from scanner.core.scan_result import Finding, Severity
@@ -107,7 +106,7 @@ def _check_batch_abuse(page: CrawlResult, client: httpx.Client, findings: List[F
                 severity=Severity.MEDIUM,
                 url=page.url,
                 parameter=None,
-                payload=f'{{"query": "{{ q0: __typename q1: __typename ... q99: __typename }}"}}',
+                payload='{"query": "{ q0: __typename q1: __typename ... q99: __typename }"}',
                 evidence=f"Server returned {len(data)} aliased results in a single request",
                 description=(
                     "GraphQL servers that allow unlimited query aliases or batch requests can be "

@@ -33,7 +33,7 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
                 url=page.url,
                 parameter=None,
                 payload=f"Origin: {origin}",
-                evidence=f"Access-Control-Allow-Origin: * (wildcard CORS policy active)",
+                evidence="Access-Control-Allow-Origin: * (wildcard CORS policy active)",
                 description=(
                     "A wildcard CORS policy allows any website to make cross-origin requests "
                     "and read the response. This exposes API data to malicious third-party pages."

@@ -91,13 +91,11 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         alg = header.get("alg", "HS256")
         hash_fn = hashlib.sha512 if alg == "HS512" else (hashlib.sha384 if alg == "HS384" else hashlib.sha256)
         signing_input = f"{token.rsplit('.', 1)[0]}".encode()
-        cracked = False
         for secret in weak_secrets:
             expected_sig = _b64_encode(
                 hmac.new(secret.encode(), signing_input, hash_fn).digest()
             )
             if expected_sig == signature:
-                cracked = True
                 findings.append(Finding(
                     title="JWT Signed with Weak Secret Key",
                     severity=Severity.CRITICAL,
@@ -152,7 +150,8 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
 
 def _load_jwt_secrets(config=None, max_secrets: int = 500) -> List[str]:
     """Gap 17 — load JWT secrets from YAML wordlist + optional custom file."""
-    import os, yaml
+    import os
+    import yaml
     secrets: List[str] = []
 
     # Custom wordlist via --jwt-wordlist

@@ -421,8 +421,8 @@ def _expand_payloads(req: TemplateRequest) -> list[dict[str, str]]:
         combos = list(zip(*lists))
     else:
         # batteringram — same position across all lists (cycle shorter ones)
-        max_len = max(len(l) for l in lists)
-        combos = [tuple(l[i % len(l)] for l in lists) for i in range(max_len)]
+        max_len = max(len(lst) for lst in lists)
+        combos = [tuple(lst[i % len(lst)] for lst in lists) for i in range(max_len)]
 
     return [{f"{{{{{k}}}}}": v for k, v in zip(keys, combo)} for combo in combos]
 

@@ -14,7 +14,7 @@ import re
 import uuid
 import httpx
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import fetch

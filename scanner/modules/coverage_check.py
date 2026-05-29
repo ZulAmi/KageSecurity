@@ -12,7 +12,7 @@ representing potential attack surface gaps.
 import re
 import httpx
 from typing import List, Set
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 

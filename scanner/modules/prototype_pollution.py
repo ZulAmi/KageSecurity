@@ -3,7 +3,7 @@ import httpx
 from typing import List
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
-from scanner.utils.http import get_url_params, inject_url_param, fetch
+from scanner.utils.http import get_url_params
 
 _CANARY = "kagesec_pp_1"
 

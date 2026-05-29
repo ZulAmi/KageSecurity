@@ -11,7 +11,7 @@ Usage:
 from __future__ import annotations
 
 import httpx
-from typing import List, Optional
+from typing import List
 from scanner.core.scan_result import ScanResult, Finding, Severity
 
 _SEVERITY_LABEL = {
@@ -126,7 +126,7 @@ def _ensure_labels(client: httpx.Client, api_base: str):
     ]
     try:
         existing_resp = client.get(f"{api_base}/labels?per_page=100")
-        existing_names = {l["name"] for l in existing_resp.json() if isinstance(l, dict)}
+        existing_names = {item["name"] for item in existing_resp.json() if isinstance(item, dict)}
         for name, color, desc in label_configs:
             if name not in existing_names:
                 client.post(f"{api_base}/labels", json={"name": name, "color": color, "description": desc})

@@ -11,10 +11,8 @@ Usage:
 """
 from __future__ import annotations
 
-import json
-import base64
 import httpx
-from typing import List, Optional
+from typing import List
 from scanner.core.scan_result import ScanResult, Finding, Severity
 
 _SEVERITY_PRIORITY = {

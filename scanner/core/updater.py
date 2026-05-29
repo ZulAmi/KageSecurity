@@ -57,7 +57,7 @@ def get_remote_version() -> Optional[str]:
             _RELEASES_API,
             headers={"User-Agent": "KageSec/1.0 template-updater"},
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:  # nosec B310
             data = json.loads(resp.read())
         tag = data.get("tag_name")
         if tag:
@@ -136,7 +136,7 @@ def _download_update(version: str, dest_dir: str) -> None:
     NUCLEI_ZIP = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"
     try:
         req = urllib.request.Request(NUCLEI_ZIP, headers={"User-Agent": "KageSec/1.0 template-updater"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
             data = resp.read()
 
         saved = 0

@@ -13,7 +13,7 @@ a broader range of client software.
 from __future__ import annotations
 
 from typing import List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity

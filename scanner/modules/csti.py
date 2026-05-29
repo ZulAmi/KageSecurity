@@ -89,12 +89,6 @@ def _passive_react_check(page: CrawlResult, findings: List[Finding]):
 
 def _active_csti(page: CrawlResult, client: httpx.Client, findings: List[Finding]):
     """Inject template expressions into URL params and forms; check for evaluation."""
-    # Detect likely framework to prioritise payloads
-    body = page.body or ""
-    is_angular = any(p.search(body) for p in _ANGULAR_INDICATORS)
-    is_vue = any(p.search(body) for p in _VUE_INDICATORS)
-    is_handlebars = bool(_HANDLEBARS_RE.search(body))
-
     reported: set = set()
 
     # URL param injection

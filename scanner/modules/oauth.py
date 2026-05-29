@@ -12,8 +12,8 @@ Detects OAuth flows from page content and tests for:
 """
 import re
 import httpx
-from typing import List, Optional
-from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
+from typing import List
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 

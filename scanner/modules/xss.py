@@ -1,7 +1,7 @@
 import re
 import uuid
 import httpx
-from typing import List, Dict, Optional, Tuple
+from typing import List, Tuple
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 from scanner.utils.http import get_url_params, inject_url_param, fetch
@@ -380,7 +380,7 @@ def _test_second_order(page: CrawlResult, client: httpx.Client, findings: List[F
     if not page.forms:
         return
 
-    from urllib.parse import urljoin, urlparse
+    from urllib.parse import urlparse
     base = urlparse(page.url)
 
     for form in page.forms:

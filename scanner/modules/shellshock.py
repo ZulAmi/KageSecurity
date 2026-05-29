@@ -2,7 +2,6 @@
 from typing import List
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity
-from scanner.utils.http import fetch
 
 _PAYLOAD = "() { :; }; echo Content-Type: text/plain; echo; "
 _CMD_PAYLOADS = [

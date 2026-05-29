@@ -8,7 +8,6 @@ login flows including TOTP 2FA.
 from __future__ import annotations
 
 import fnmatch
-import re
 from typing import List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 

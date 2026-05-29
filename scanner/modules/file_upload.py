@@ -12,7 +12,6 @@ Does NOT actually execute uploaded files — only checks server acceptance.
 import io
 import re
 from typing import List
-from urllib.parse import urlparse, urljoin
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity
 

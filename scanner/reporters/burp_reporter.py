@@ -58,20 +58,9 @@ def generate_burp(result: "ScanResult", out_path: str) -> str:
         from urllib.parse import urlparse
         parsed = urlparse(f.url)
         host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        protocol = parsed.scheme
-
-        param_elem = ""
-        if f.parameter:
-            param_elem = f"  <parameter>{_e(f.parameter)}</parameter>"
-
-        request_elem = ""
-        if f.payload:
-            request_elem = f"  <request>{_e(f.payload)}</request>"
-
         lines.append("  <issue>")
         lines.append(f"    <serialNumber>{abs(hash(f.url + f.title))}</serialNumber>")
-        lines.append(f"    <type>134217728</type>")  # generic custom issue type
+        lines.append("    <type>134217728</type>")  # generic custom issue type
         lines.append(f"    <name>{_e(f.title)}</name>")
         lines.append(f"    <host ip=\"\">{_e(host)}</host>")
         lines.append(f"    <path>{_e(parsed.path or '/')}</path>")

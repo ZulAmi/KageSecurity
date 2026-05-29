@@ -1,4 +1,3 @@
-import socket
 from urllib.parse import urlparse
 from typing import List
 from scanner.core.crawler import CrawlResult
@@ -67,7 +66,6 @@ def _check_with_dnspython(domain: str) -> List[Finding]:
 
 
 def _check_spf(domain: str, resolver) -> List[Finding]:
-    import dns.resolver
     try:
         answers = resolver.resolve(domain, "TXT")
         for rdata in answers:
@@ -97,7 +95,6 @@ def _check_spf(domain: str, resolver) -> List[Finding]:
 
 
 def _check_dmarc(domain: str, resolver) -> List[Finding]:
-    import dns.resolver
     try:
         resolver.resolve(f"_dmarc.{domain}", "TXT")
         return []
