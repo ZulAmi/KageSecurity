@@ -60,7 +60,7 @@ def _engine_binary() -> str | None:
     # 1. Bundled binary (pip install) — scanner/_bin/kagesec-engine
     if os.path.isfile(_BUNDLED_BINARY):
         if not os.access(_BUNDLED_BINARY, os.X_OK):
-            os.chmod(_BUNDLED_BINARY, 0o755)
+            os.chmod(_BUNDLED_BINARY, 0o755)  # nosec B103 — executable bit required for bundled binary
         return _BUNDLED_BINARY
     # 2. Dev / cloned repo — engine/kagesec-engine
     if os.path.isfile(_ENGINE_BINARY) and os.access(_ENGINE_BINARY, os.X_OK):

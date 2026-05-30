@@ -498,7 +498,7 @@ def _interactive_ai_setup() -> tuple[str | None, str | None]:
             print("\n    [!] Ollama doesn't appear to be running at localhost:11434.")
             print("        Start it with: ollama serve\n")
             return None, None
-        print(f"\n[*] Using Ollama (local)\n")
+        print("\n[*] Using Ollama (local)\n")
         return "ollama", None
 
     try:
