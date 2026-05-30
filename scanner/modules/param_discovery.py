@@ -14,12 +14,17 @@ Attack classes found:
   - Feature flag parameters (beta=1, experimental=true)
 """
 import os
+import threading
 import yaml
 import httpx
 from typing import List
 from urllib.parse import urlparse, urlunparse, parse_qs
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
+
+# Deduplicate across pages — track (host, param) pairs already reported
+_seen: set = set()
+_seen_lock = threading.Lock()
 
 _BUILTIN_PARAMS = os.path.join(os.path.dirname(__file__), "..", "payloads", "params.yaml")
 
@@ -137,8 +142,15 @@ def _probe_params(page: CrawlResult, client: httpx.Client, params: List[str], fi
             if jsonp_reflected:
                 evidence_parts.append(f"JSONP callback '{val}' reflected in response")
 
+            host = urlparse(page.url).netloc
+            dedup_key = (host, param)
+            with _seen_lock:
+                if dedup_key in _seen:
+                    break
+                _seen.add(dedup_key)
+
             findings.append(Finding(
-                title=f"Hidden Parameter Discovered — ?{param}={val}",
+                title=f"Hidden Parameter Discovered — {param}",
                 severity=severity,
                 url=page.url,
                 parameter=param,

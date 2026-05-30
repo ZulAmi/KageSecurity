@@ -1,13 +1,23 @@
+import threading
 import uuid
 import httpx
 from typing import List
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 
 NULL_ORIGIN = "null"
 
+_seen: set = set()
+_seen_lock = threading.Lock()
+
 
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
+    host = urlparse(page.url).netloc
+    with _seen_lock:
+        if host in _seen:
+            return []
+        _seen.add(host)
     findings = []
 
     # Use a randomised subdomain so no production allowlist could legitimately contain it.

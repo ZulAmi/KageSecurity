@@ -12,10 +12,15 @@ or misconfigured, since either alone is sufficient protection on modern browsers
 """
 from __future__ import annotations
 
+import threading
 from typing import List
+from urllib.parse import urlparse
 
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity
+
+_seen: set = set()
+_seen_lock = threading.Lock()
 
 _FRAMING_HEADERS = ("x-frame-options", "content-security-policy")
 
@@ -31,6 +36,7 @@ def test(page: CrawlResult, client) -> List[Finding]:
     if page.status_code not in range(200, 400):
         return []
 
+    host = urlparse(page.url).netloc
     headers_lower = {k.lower(): v.lower() for k, v in page.headers.items()}
     findings: List[Finding] = []
 
@@ -42,6 +48,10 @@ def test(page: CrawlResult, client) -> List[Finding]:
 
     # Both absent → vulnerable
     if not xfo_protected and not csp_protected:
+        with _seen_lock:
+            if (host, "no-framing-protection") in _seen:
+                return findings
+            _seen.add((host, "no-framing-protection"))
         # Check for meta tag fallback (not reliable but worth noting)
         meta_xfo = 'x-frame-options' in (page.body or "").lower()
 
@@ -77,6 +87,10 @@ def test(page: CrawlResult, client) -> List[Finding]:
 
     # XFO present but not CSP → partial (modern browsers ignore XFO for nested iframes)
     elif xfo_protected and not csp_protected:
+        with _seen_lock:
+            if (host, "xfo-without-csp") in _seen:
+                return findings
+            _seen.add((host, "xfo-without-csp"))
         findings.append(Finding(
             title="Clickjacking — X-Frame-Options Without CSP frame-ancestors",
             severity=Severity.LOW,
@@ -104,6 +118,10 @@ def test(page: CrawlResult, client) -> List[Finding]:
 
     # XFO set to ALLOWALL (explicitly insecure)
     if "allowall" in xfo:
+        with _seen_lock:
+            if (host, "xfo-allowall") in _seen:
+                return findings
+            _seen.add((host, "xfo-allowall"))
         findings.append(Finding(
             title="Clickjacking — X-Frame-Options: ALLOWALL",
             severity=Severity.HIGH,

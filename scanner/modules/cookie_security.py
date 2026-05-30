@@ -1,11 +1,17 @@
+import threading
 import httpx
 from typing import List
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
+
+_seen: set = set()
+_seen_lock = threading.Lock()
 
 
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     findings = []
+    host = urlparse(page.url).netloc
     raw_cookies = page.headers.get("set-cookie", "")
     if not raw_cookies:
         return findings
@@ -21,54 +27,72 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
         parts_lower = cookie_line.lower()
 
         if "httponly" not in parts_lower:
-            findings.append(Finding(
-                title="Cookie Missing HttpOnly Flag",
-                severity=Severity.MEDIUM,
-                url=page.url,
-                parameter=name,
-                payload=None,
-                evidence=f"Set-Cookie: {cookie_line[:100]} — HttpOnly not set",
-                description="Cookies without HttpOnly can be read by JavaScript, enabling session theft via XSS.",
-                remediation="Add the HttpOnly flag to all session and authentication cookies.",
-                cwe="CWE-1004",
-                cvss=4.3,
-                owasp_category="A07:2021 Identification and Authentication Failures",
-                standards=["ISO27001-8.8", "HIPAA-164.312a", "GDPR-Art32"],
-                confidence=1.0,
-            ))
+            key = (host, name, "httponly")
+            with _seen_lock:
+                if key in _seen:
+                    pass
+                else:
+                    _seen.add(key)
+                    findings.append(Finding(
+                        title="Cookie Missing HttpOnly Flag",
+                        severity=Severity.MEDIUM,
+                        url=page.url,
+                        parameter=name,
+                        payload=None,
+                        evidence=f"Set-Cookie: {cookie_line[:100]} — HttpOnly not set",
+                        description="Cookies without HttpOnly can be read by JavaScript, enabling session theft via XSS.",
+                        remediation="Add the HttpOnly flag to all session and authentication cookies.",
+                        cwe="CWE-1004",
+                        cvss=4.3,
+                        owasp_category="A07:2021 Identification and Authentication Failures",
+                        standards=["ISO27001-8.8", "HIPAA-164.312a", "GDPR-Art32"],
+                        confidence=1.0,
+                    ))
 
         if "secure" not in parts_lower:
-            findings.append(Finding(
-                title="Cookie Missing Secure Flag",
-                severity=Severity.MEDIUM,
-                url=page.url,
-                parameter=name,
-                payload=None,
-                evidence=f"Set-Cookie: {cookie_line[:100]} — Secure not set",
-                description="Cookies without the Secure flag can be transmitted over HTTP, exposing them to interception.",
-                remediation="Add the Secure flag to all cookies, especially session tokens.",
-                cwe="CWE-614",
-                cvss=4.3,
-                owasp_category="A02:2021 Cryptographic Failures",
-                standards=["ISO27001-8.24", "HIPAA-164.312c", "GDPR-Art32"],
-                confidence=1.0,
-            ))
+            key = (host, name, "secure")
+            with _seen_lock:
+                if key in _seen:
+                    pass
+                else:
+                    _seen.add(key)
+                    findings.append(Finding(
+                        title="Cookie Missing Secure Flag",
+                        severity=Severity.MEDIUM,
+                        url=page.url,
+                        parameter=name,
+                        payload=None,
+                        evidence=f"Set-Cookie: {cookie_line[:100]} — Secure not set",
+                        description="Cookies without the Secure flag can be transmitted over HTTP, exposing them to interception.",
+                        remediation="Add the Secure flag to all cookies, especially session tokens.",
+                        cwe="CWE-614",
+                        cvss=4.3,
+                        owasp_category="A02:2021 Cryptographic Failures",
+                        standards=["ISO27001-8.24", "HIPAA-164.312c", "GDPR-Art32"],
+                        confidence=1.0,
+                    ))
 
         if "samesite" not in parts_lower:
-            findings.append(Finding(
-                title="Cookie Missing SameSite Attribute",
-                severity=Severity.LOW,
-                url=page.url,
-                parameter=name,
-                payload=None,
-                evidence=f"Set-Cookie: {cookie_line[:100]} — SameSite not set",
-                description="Without SameSite, cookies are sent on cross-site requests, enabling CSRF attacks.",
-                remediation="Add `SameSite=Lax` (minimum) or `SameSite=Strict` to session cookies.",
-                cwe="CWE-352",
-                cvss=3.1,
-                owasp_category="A01:2021 Broken Access Control",
-                standards=["ISO27001-8.8", "GDPR-Art32"],
-                confidence=1.0,
-            ))
+            key = (host, name, "samesite")
+            with _seen_lock:
+                if key in _seen:
+                    pass
+                else:
+                    _seen.add(key)
+                    findings.append(Finding(
+                        title="Cookie Missing SameSite Attribute",
+                        severity=Severity.LOW,
+                        url=page.url,
+                        parameter=name,
+                        payload=None,
+                        evidence=f"Set-Cookie: {cookie_line[:100]} — SameSite not set",
+                        description="Without SameSite, cookies are sent on cross-site requests, enabling CSRF attacks.",
+                        remediation="Add `SameSite=Lax` (minimum) or `SameSite=Strict` to session cookies.",
+                        cwe="CWE-352",
+                        cvss=3.1,
+                        owasp_category="A01:2021 Broken Access Control",
+                        standards=["ISO27001-8.8", "GDPR-Art32"],
+                        confidence=1.0,
+                    ))
 
     return findings

@@ -1,8 +1,13 @@
 import re
+import threading
 import httpx
 from typing import List
+from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
+
+_seen: set = set()
+_seen_lock = threading.Lock()
 
 # CSP keywords are always single-quoted per the spec; match only the quoted form
 # to avoid matching comments or attribute values containing "unsafe-inline" as prose.
@@ -68,10 +73,16 @@ HEADERS = [
 
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     findings = []
+    host = urlparse(page.url).netloc
     headers_lower = {k.lower(): v for k, v in page.headers.items()}
 
     for h in HEADERS:
         if h["header"].lower() not in headers_lower:
+            key = (host, h["header"])
+            with _seen_lock:
+                if key in _seen:
+                    continue
+                _seen.add(key)
             findings.append(Finding(
                 title=h["title"],
                 severity=h["severity"],
@@ -91,6 +102,12 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     # Check for CSP 'unsafe-inline' even if header is present
     csp = headers_lower.get("content-security-policy", "")
     if csp and _UNSAFE_INLINE_RE.search(csp):
+        key = (host, "csp-unsafe-inline")
+        with _seen_lock:
+            if key not in _seen:
+                _seen.add(key)
+            else:
+                return findings
         findings.append(Finding(
             title="Weak Content-Security-Policy (unsafe-inline)",
             severity=Severity.MEDIUM,

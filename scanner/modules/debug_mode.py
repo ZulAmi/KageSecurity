@@ -7,9 +7,14 @@ Triggers:
 - Check response headers for debug signals
 """
 import re
+import threading
 from typing import List
+from urllib.parse import urlparse
 from scanner.core.crawler import CrawlResult
 from scanner.core.scan_result import Finding, Severity
+
+_seen: set = set()
+_seen_lock = threading.Lock()
 
 # Patterns in body that indicate debug mode or stack trace exposure
 _STACK_TRACE_PATTERNS = [
@@ -77,10 +82,16 @@ def test(page: CrawlResult, client) -> List[Finding]:
 
 def _check_headers(page: CrawlResult) -> List[Finding]:
     findings = []
+    host = urlparse(page.url).netloc
     for header, note in _DEBUG_HEADERS.items():
         value = page.headers.get(header, "")
         if not value:
             continue
+        key = (host, header)
+        with _seen_lock:
+            if key in _seen:
+                continue
+            _seen.add(key)
         if header == "x-debug-token":
             findings.append(Finding(
                 title="Symfony Profiler Debug Token Exposed in Header",

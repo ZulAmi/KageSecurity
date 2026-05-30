@@ -68,8 +68,7 @@ def _inject_url_params(page: CrawlResult, client: httpx.Client, payloads: List[s
                 client.get(test_url, timeout=8)
             except Exception:
                 continue
-            # Blind — we log the injection but detection happens via OOB poll
-            findings.append(_blind_finding(page.url, param_name, payload, canary, "URL parameter"))
+            # Payload injected — finding only created when OOB callback is confirmed
             break
 
 
@@ -84,7 +83,7 @@ def _inject_forms(page: CrawlResult, client: httpx.Client, payloads: List[str], 
                 fetch(client, form["method"], form["action"], data)
             except Exception:
                 continue
-            findings.append(_blind_finding(form["action"], input_names[0], payload, canary, "form field"))
+            # Payload injected — finding only created when OOB callback is confirmed
             break
 
 
@@ -96,7 +95,7 @@ def _inject_headers(page: CrawlResult, client: httpx.Client, payloads: List[str]
                 client.get(page.url, headers={header: payload}, timeout=8)
             except Exception:
                 continue
-        findings.append(_blind_finding(page.url, "HTTP header", payload, canary, "request header"))
+        # Payload injected — finding only created when OOB callback is confirmed
         break
 
 
