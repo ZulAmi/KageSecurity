@@ -41,6 +41,12 @@ dashboard/tsconfig.tsbuildinfo
 # Node
 node_modules/
 
+# Go engine binaries (platform-specific, built in CI)
+engine/kagesec-engine
+engine/kagesec-engine.exe
+scanner/_bin/kagesec-engine
+scanner/_bin/kagesec-engine.exe
+
 # OS
 .DS_Store
 Thumbs.db

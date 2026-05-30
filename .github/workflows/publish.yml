@@ -75,23 +75,69 @@ jobs:
           helm push kagesec-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
 
   publish-pypi:
-    name: Publish to PyPI
-    runs-on: ubuntu-latest
+    name: Publish to PyPI (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.os }}
     environment: release
     permissions:
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            bin_name: kagesec-engine
+            plat_name: manylinux_2_17_x86_64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            bin_name: kagesec-engine
+            plat_name: macosx_11_0_arm64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            bin_name: kagesec-engine
+            plat_name: macosx_10_15_x86_64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            bin_name: kagesec-engine.exe
+            plat_name: win_amd64
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: engine/go.sum
+
+      - name: Build Go engine
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          cd engine
+          go build -ldflags="-s -w" -o ../scanner/_bin/${{ matrix.bin_name }} .
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Build package
+      - name: Build platform wheel
+        shell: bash
         run: |
-          pip install build
-          python -m build
+          pip install build wheel
+          python -m build --wheel
+          # Retag Linux wheel to manylinux so PyPI accepts it
+          if [[ "${{ matrix.goos }}" == "linux" ]]; then
+            wheel tags --plat-name ${{ matrix.plat_name }} --remove dist/kagesec-*.whl
+          fi
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

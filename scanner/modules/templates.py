@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from typing import List
 
@@ -25,7 +26,11 @@ from scanner.core.template_runner import load_templates, run_template
 from scanner.core.fingerprinter import fingerprint_page
 
 _NUCLEI_TEMPLATES_DIR = os.path.expanduser("~/.kagesec/nuclei-templates")
-_ENGINE_BINARY = os.path.join(os.path.dirname(__file__), "..", "..", "engine", "kagesec-engine")
+_BIN_NAME = "kagesec-engine.exe" if sys.platform == "win32" else "kagesec-engine"
+# Bundled binary (pip install): scanner/_bin/kagesec-engine
+_BUNDLED_BINARY = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "_bin", _BIN_NAME))
+# Dev/cloned repo: engine/kagesec-engine
+_ENGINE_BINARY = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "engine", _BIN_NAME))
 
 _template_cache: dict[str, list] = {}
 _state: dict[str, dict] = {}
@@ -52,10 +57,16 @@ _SEVERITY_MAP = {
 
 def _engine_binary() -> str | None:
     """Return path to kagesec-engine if available, else None."""
+    # 1. Bundled binary (pip install) — scanner/_bin/kagesec-engine
+    if os.path.isfile(_BUNDLED_BINARY):
+        if not os.access(_BUNDLED_BINARY, os.X_OK):
+            os.chmod(_BUNDLED_BINARY, 0o755)
+        return _BUNDLED_BINARY
+    # 2. Dev / cloned repo — engine/kagesec-engine
     if os.path.isfile(_ENGINE_BINARY) and os.access(_ENGINE_BINARY, os.X_OK):
         return _ENGINE_BINARY
-    found = shutil.which("kagesec-engine")
-    return found
+    # 3. System PATH
+    return shutil.which(_BIN_NAME)
 
 
 def test(page: CrawlResult, client, config=None) -> List[Finding]:

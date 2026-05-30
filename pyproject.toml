@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kagesec"
-version = "0.2.1"
+version = "0.2.2"
 description = "AI-powered web application security scanner — OWASP Top 10, HIPAA, GDPR, ISO 27001, APPI"
 readme = "README.md"
 license = { text = "MIT" }
@@ -95,4 +95,4 @@ where = ["."]
 include = ["scanner*", "cli*"]
 
 [tool.setuptools.package-data]
-"scanner" = ["**/*.yaml", "**/*.yml", "**/*.html", "**/*.css", "**/*.j2"]
+"scanner" = ["**/*.yaml", "**/*.yml", "**/*.html", "**/*.css", "**/*.j2", "_bin/*"]
