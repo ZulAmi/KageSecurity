@@ -431,10 +431,14 @@ def run_scan(
         _max_minutes = getattr(config, "max_time_minutes", 0)
         _deadline = (start + _max_minutes * 60) if _max_minutes > 0 else None
 
-        # Total time budget for all modules: 3 seconds per module per page,
-        # minimum 120 seconds. as_completed(timeout=N) raises TimeoutError when
-        # exceeded, so a handful of stuck modules can't hang the entire scan.
-        _module_budget = max(120, len(active_modules) * max(1, len(pages)) * 3)
+        # 3 seconds per module per page, minimum 120 s. Prevents a handful of
+        # stuck modules from hanging the entire scan.
+        # When --nuclei-templates is on, the Go engine runs once and needs extra
+        # time beyond what the per-page formula allows. Add 600s (10 min) headroom.
+        # --max-time is still honoured as the hard wall-clock cap.
+        _base_budget = max(120, len(active_modules) * max(1, len(pages)) * 3)
+        _nuclei_extra = 600 if getattr(config, "nuclei_templates", False) else 0
+        _module_budget = _base_budget + _nuclei_extra
 
         executor = ThreadPoolExecutor(max_workers=max(1, concurrency))
         _timed_out = False
@@ -448,8 +452,14 @@ def run_scan(
             _total_work = len(futures)
             _done = 0
             _budget_exceeded = False
+            # If --max-time is set, cap the as_completed timeout to the
+            # remaining wall-clock time so the scan actually stops on time.
+            _effective_budget = _module_budget
+            if _deadline:
+                _remaining = _deadline - time.time()
+                _effective_budget = min(_module_budget, max(1.0, _remaining))
             try:
-                for future in as_completed(futures, timeout=_module_budget):
+                for future in as_completed(futures, timeout=_effective_budget):
                     if _budget_exceeded:
                         future.cancel()
                         continue

@@ -108,21 +108,29 @@ def _save_cache(fp: dict[str, str], selection: dict) -> None:
 # AI call
 # ---------------------------------------------------------------------------
 
-def _ask_claude(fp: dict[str, str], api_key: str) -> dict:
-    """Ask Claude which tags/CVEs are relevant for this stack. Returns selection dict."""
-    import anthropic
+def _ask_claude(fp: dict[str, str], api_key: str, provider: str = "anthropic", model: str | None = None) -> dict:
+    """Ask the AI which tags/CVEs are relevant for this stack. Returns selection dict."""
+    from scanner.ai.provider import complete as ai_complete
+
+    # For template selection we want the cheapest/fastest model per provider
+    _cheap = {
+        "anthropic": "claude-haiku-4-5-20251001",
+        "openai":    "gpt-4o-mini",
+        "gemini":    "gemini-1.5-flash",
+        "mistral":   "mistral-small-latest",
+    }
+    resolved_model = model or _cheap.get(provider)
 
     tech_lines = "\n".join(f"  - {k}: {v}" for k, v in fp.items())
     prompt = f"Technology stack detected:\n{tech_lines}\n\nWhich template tags, CVE IDs, and keywords are most relevant?"
 
-    client = anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",   # cheapest model — this is a simple classification task
-        max_tokens=512,
+    raw = ai_complete(
         system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = msg.content[0].text.strip()
+        user=prompt,
+        api_key=api_key,
+        provider=provider,
+        model=resolved_model,
+    ).strip()
     if raw.startswith("```"):
         parts = raw.split("```")
         raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw
@@ -178,6 +186,8 @@ def select_templates(
     fingerprints: dict[str, str],
     all_templates: "list[Template]",
     api_key: str,
+    provider: str = "anthropic",
+    model: str | None = None,
 ) -> "list[Template]":
     """
     Return the subset of `all_templates` relevant for the detected `fingerprints`.
@@ -197,7 +207,7 @@ def select_templates(
         }
     else:
         try:
-            selection = _ask_claude(fingerprints, api_key)
+            selection = _ask_claude(fingerprints, api_key, provider=provider, model=model)
             _save_cache(fingerprints, {
                 "tags":     list(selection["tags"]),
                 "cve_ids":  list(selection["cve_ids"]),

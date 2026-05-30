@@ -1,11 +1,41 @@
 # KageSec
 
-**A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 50 CVE templates, and — if you give it a Claude API key — uses AI to verify whether the findings are real or just vibes.
+**A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and — if you give it a Claude API key — uses AI to verify whether the findings are real or just vibes.
 
-Think of it as Nuclei and ZAP had a baby, the baby learned Python, and then the baby got really into AI.
+Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then the baby got really into AI.
+
+## vs Nuclei CLI — Real Benchmark
+
+Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app), same template directory (`~/.kagesec/nuclei-templates`), same concurrency (50):
+
+| | KageSec (no AI, no browser) | Nuclei CLI |
+|---|---|---|
+| **Total scan time** | **34m 47s** | **5m 22s** |
+| Pages / URLs scanned | 31 pages crawled | 1 URL |
+| Templates run | 7,417 HTTP templates | 9,028 templates |
+| Template findings | 24 | 25 |
+| **Total findings** | **63** | **25** |
+| OS Command Injection | ✅ CRITICAL | ❌ |
+| Server-Side Template Injection | ✅ CRITICAL | ❌ |
+| Client-Side Template Injection | ✅ CRITICAL | ❌ |
+| DOM-Based XSS | ✅ HIGH | ❌ |
+| Reflected XSS | ✅ HIGH | ❌ |
+| Insecure Direct Object Reference | ✅ HIGH | ❌ |
+| Blind XSS | ✅ HIGH | ❌ |
+| SSI Injection | ✅ HIGH | ❌ |
+| CSRF | ✅ MEDIUM | ❌ |
+| Business Logic flaws | ✅ MEDIUM | ❌ |
+| Hidden paths (/admin 403) | ✅ | ❌ |
+| Subdomain discovery | ✅ | ❌ |
+| Nuclei's 25 findings | ✅ (24 matched) | ✅ |
+
+**KageSec takes longer because it does more.** The 34 minutes is almost entirely page crawling and per-page exploitation across 31 pages — the template engine itself completes in ~2 minutes concurrently. Nuclei fires templates at one URL and stops; it cannot find SSTI, DOM XSS, IDOR, or business logic flaws because it never crawls the application.
+
+The template match rate is comparable (24 vs 25). The 38 additional findings are vulnerabilities that only exist if you actually test the application.
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
-![Version](https://img.shields.io/badge/version-0.2.0--beta-orange)
+![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
+![Version](https://img.shields.io/badge/version-0.2.1--beta-orange)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
@@ -24,7 +54,49 @@ I know Nuclei exists. It's great. It's the industry open-source standard and Pro
 
 So I built KageSec instead — open-source, AI-powered, and free. It runs the same categories of checks, uses Nuclei-compatible templates, and adds Claude AI on top to verify whether findings are actually exploitable (so you're not manually triaging 200 false positives at 11pm).
 
+Then I took it further. KageSec ships a purpose-built Go template engine (`kagesec-engine`) that runs 10,000+ templates concurrently with 50 goroutines, streams findings in real-time, and scores each result with a confidence value (0.0–1.0) instead of Nuclei's binary match/no-match. It fingerprints your target stack and runs the most relevant templates first — so even a partial scan surfaces the highest-value findings. In testing: 7,417 templates against a live target in 73 seconds.
+
 Zero subscription fees. Zero per-seat pricing. Zero "contact us for enterprise". Just clone it and run it.
+
+---
+
+## Go Template Engine
+
+KageSec ships `kagesec-engine` — a purpose-built Go binary that handles the template execution phase. It is not a wrapper around Nuclei. It is a replacement.
+
+### Why not just use Nuclei?
+
+| Feature | Nuclei | kagesec-engine |
+|---|---|---|
+| Template selection | Tag filters only | Fingerprints the target stack, runs most relevant templates first |
+| False positive scoring | Binary match / no-match | Confidence score 0.0–1.0 per finding |
+| OOB templates | Creates findings on injection | Skipped — no unconfirmed false positives without a real callback listener |
+| Output | JSON files or stdout | JSON Lines streamed in real-time — Python reads findings as they arrive |
+| Auth context | Limited | Inherits all KageSec headers, cookies, and bearer tokens |
+| Template coverage | 9,028 (incl. flow/js/code) | 7,417 HTTP templates — flow/javascript/code templates not yet supported |
+| AI filtering | None | With API key, Claude narrows 7,400+ templates to 80-200 relevant ones |
+
+In benchmark testing against a live target: **7,417 HTTP templates in ~2 minutes** with 50 goroutines, running concurrently alongside the page scan. Nuclei ran 9,028 templates in 5m 22s as a standalone scan — both matched ~25 findings from the same template set. KageSec's total scan time is higher because it crawls and exploits the full application; the template engine itself is the same speed class as Nuclei.
+
+### Building the engine
+
+```bash
+# Requires Go 1.22+
+cd engine
+go build -o kagesec-engine .
+```
+
+The Python scanner auto-detects the binary at `engine/kagesec-engine` or anywhere in `PATH`. If the binary is not found, it falls back to the Python template runner automatically — no configuration needed.
+
+### Cross-compiling for CI / Docker
+
+```bash
+# Linux (for Docker/CI)
+GOOS=linux GOARCH=amd64 go build -o kagesec-engine-linux-amd64 .
+
+# Windows
+GOOS=windows GOARCH=amd64 go build -o kagesec-engine-windows-amd64.exe .
+```
 
 ---
 
@@ -51,7 +123,8 @@ Check `reports/` when it's done.
 ## What it does
 
 - **61 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, we've got a module for it.
-- **50 CVE templates** — Log4Shell, ProxyShell, Spring4Shell, MOVEit, Citrix Bleed, and the rest of the greatest hits
+- **Go template engine** — `kagesec-engine` runs 7,417 HTTP-compatible Nuclei templates with 50 goroutines, real-time streaming, confidence scoring, and stack-aware template ordering. Benchmarked at ~2 minutes for 7,417 templates — comparable match rate to Nuclei CLI (24 vs 25 on the same target), zero false positives from unconfirmed OOB callbacks.
+- **50 built-in CVE templates** — Log4Shell, ProxyShell, Spring4Shell, MOVEit, Citrix Bleed, and the rest of the greatest hits. 10,000+ community templates available via `kagesec update-templates`.
 - **AI verification** — Claude API checks whether findings are actually exploitable, so your report doesn't look like it was written by a panicking intern
 - **Headless browser crawling** — Playwright handles SPAs and JS-heavy apps. Enabled by default because it's 2025 and everything is a React app
 - **Full auth support** — Bearer tokens, cookies, OAuth2, multi-step logins, TOTP 2FA. If your app has a login page, we can get in
@@ -306,7 +379,7 @@ You don't have to do anything. Deploy → scan happens. Check `reports/` when it
 | `dnssec`             | DNSSEC, SPF, DMARC validation                                                                               |
 | `rate_limit`         | Insufficient rate limiting / missing brute-force protection                                                 |
 | `captcha_check`      | Weak CAPTCHA (client-side validation, predictable seeds)                                                    |
-| `templates`          | Nuclei-compatible YAML template runner (59 built-in; use `--nuclei-templates` for 10k+ community templates) |
+| `templates`          | Nuclei-compatible YAML template runner (59 built-in; use `--nuclei-templates` for 7,400+ community HTTP templates) |
 
 ---
 
@@ -333,16 +406,18 @@ You don't have to do anything. Deploy → scan happens. Check `reports/` when it
 - **Misconfigurations** (7): `.env` exposure, `.git` exposure, GraphQL introspection open, Swagger/OpenAPI public, `phpinfo.php`, Apache server-status, backup files
 - **AI-generated**: Claude generates targeted templates per detected stack and caches them for 30 days
 
-Want the full 10,000+ Nuclei community templates?
+Want the full Nuclei community templates?
 
 ```bash
 kagesec update-templates
 
-# Then run with them (warning: slow without an AI key for template selection)
+# Run with them — Go engine handles the load (~7,400 HTTP templates in ~2 min)
 kagesec scan https://target.example.com --nuclei-templates
 ```
 
-With an AI key, Claude selects the 80-200 relevant templates from the 10k+ pool — so you get community coverage without the 3-hour scan time.
+The Go engine runs all HTTP-compatible templates concurrently with no timeout. With an AI key, Claude also pre-selects the 80-200 most relevant templates for your stack — so you get targeted coverage faster with higher signal.
+
+> **Note:** `kagesec update-templates` downloads ~10,900 YAML files. The Go engine loads the ~7,400 that use HTTP requests — templates using `flow:`, `javascript:`, `code:`, or `headless:` blocks are skipped. OOB-based templates are also skipped to avoid unconfirmed false positives. In benchmark testing, KageSec matched 24 findings vs Nuclei CLI's 25 on the same target and template set.
 
 ---
 
@@ -582,11 +657,12 @@ No API key? No problem. KageSec runs all 61 modules and produces full reports wi
 
 ## Stack
 
-- **Language:** Python 3.12+
-- **HTTP client:** httpx
+- **Orchestration:** Python 3.12+
+- **Template engine:** Go 1.22+ (`kagesec-engine` — 50 goroutines, real-time JSON Lines output)
+- **HTTP client:** httpx (Python), `net/http` (Go engine)
 - **Browser:** Playwright (Chromium)
 - **AI:** Claude API (Anthropic) — `claude-sonnet-4-6` / `claude-opus-4-7`
-- **Templates:** Nuclei-compatible YAML
+- **Templates:** Nuclei-compatible YAML (`gopkg.in/yaml.v3`)
 - **Reports:** Jinja2, WeasyPrint (PDF), SARIF 2.1.0
 
 ---
@@ -606,6 +682,13 @@ kagesec/
 │   ├── api/                # HTTP API server
 │   ├── mcp_server.py       # Claude Code MCP integration
 │   └── utils/              # HTTP helpers, payload loading
+├── engine/                 # Go template engine (kagesec-engine)
+│   ├── main.go
+│   ├── cmd/root.go         # CLI flags
+│   ├── template/           # YAML loader, executor, matcher, selector
+│   ├── runner/engine.go    # Goroutine pool, work distribution
+│   ├── output/streamer.go  # JSON Lines real-time output
+│   └── go.mod
 ├── .claude/
 │   ├── settings.json       # Claude Code hooks config
 │   └── hooks/

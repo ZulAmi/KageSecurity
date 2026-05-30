@@ -47,8 +47,9 @@ def main():
             "'all' — generate all formats."
         ),
     )
-    scan_cmd.add_argument("--no-ai", action="store_true", help="Skip AI verification and CVE research")
-    scan_cmd.add_argument("--api-key", metavar="KEY", help="Anthropic API key (overrides ANTHROPIC_API_KEY)")
+    scan_cmd.add_argument("--no-ai", action="store_true", help="Skip AI — no provider prompt, no verification")
+    scan_cmd.add_argument("--ai-model", metavar="MODEL", help="Override the default model for the selected AI provider")
+    scan_cmd.add_argument("--ollama-url", metavar="URL", help="Ollama base URL (default: http://localhost:11434)")
     scan_cmd.add_argument(
         "--compliance", nargs="+",
         choices=["iso27001", "hipaa", "gdpr", "appi"],
@@ -445,6 +446,75 @@ def main():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _interactive_ai_setup() -> tuple[str | None, str | None]:
+    """Show a numbered provider menu when no AI key is configured.
+
+    Returns (provider, api_key). Both are None if the user skips or if
+    stdin is not a terminal (CI/CD environments).
+    """
+    import sys
+    import getpass
+
+    if not sys.stdin.isatty():
+        print("[!] No AI key found — running without AI features.\n")
+        return None, None
+
+    _PROVIDERS = [
+        ("anthropic", "Anthropic Claude",   "claude.ai/settings — recommended"),
+        ("openai",    "OpenAI GPT-4o",      "platform.openai.com/api-keys"),
+        ("gemini",    "Google Gemini",       "aistudio.google.com/app/apikey"),
+        ("mistral",   "Mistral Large",       "console.mistral.ai"),
+        ("ollama",    "Ollama (local)",      "no key needed — runs on your machine"),
+    ]
+
+    print("\n[?] No AI key detected.")
+    print("    AI verification cuts false positives, scores exploitability,")
+    print("    and writes a human-readable report. Select a provider:\n")
+
+    for i, (_, name, hint) in enumerate(_PROVIDERS, 1):
+        print(f"    {i}. {name}  —  {hint}")
+    print(f"    {len(_PROVIDERS) + 1}. Skip — run without AI\n")
+
+    try:
+        raw = input(f"    > Choice [1-{len(_PROVIDERS) + 1}]: ").strip()
+        choice = int(raw)
+    except (ValueError, EOFError, KeyboardInterrupt):
+        print()
+        return None, None
+
+    if choice < 1 or choice > len(_PROVIDERS) + 1:
+        print("    Invalid choice — running without AI.\n")
+        return None, None
+
+    if choice == len(_PROVIDERS) + 1:
+        print("    Skipping AI.\n")
+        return None, None
+
+    provider, name, _ = _PROVIDERS[choice - 1]
+
+    if provider == "ollama":
+        from scanner.ai.provider import _ollama_available
+        if not _ollama_available():
+            print("\n    [!] Ollama doesn't appear to be running at localhost:11434.")
+            print("        Start it with: ollama serve\n")
+            return None, None
+        print(f"\n[*] Using Ollama (local)\n")
+        return "ollama", None
+
+    try:
+        key = getpass.getpass(f"\n    > Paste your {name} API key (input hidden): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None, None
+
+    if not key:
+        print("    No key entered — running without AI.\n")
+        return None, None
+
+    print(f"\n[*] AI provider: {name}\n")
+    return provider, key
+
+
 def _print_disclaimer() -> None:
     print(
         "\n"
@@ -610,13 +680,23 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         config.exclude_patterns = _env_exclude
 
     api_key = None
+    ai_provider = None
+    ai_model = getattr(args, "ai_model", None)
+
     if not args.no_ai:
-        api_key = getattr(args, "api_key", None) or os.getenv("ANTHROPIC_API_KEY")
-    if not args.no_ai and not api_key:
-        print("[!] No Anthropic API key — running without AI features.")
-        print("    Set ANTHROPIC_API_KEY or pass --api-key <key> to enable AI.\n")
+        from scanner.ai.provider import detect as detect_provider, provider_label
+
+        ai_provider, api_key = detect_provider()
+
+        if ai_provider:
+            print(f"[*] AI provider: {provider_label(ai_provider, ai_model)}")
+        else:
+            # No key found anywhere — ask interactively
+            ai_provider, api_key = _interactive_ai_setup()
 
     config.api_key = api_key
+    config.ai_provider = ai_provider or "anthropic"
+    config.ai_model = ai_model
 
     # Live findings callback — prints each finding as it is discovered
     _live = getattr(args, "live", False)
@@ -683,7 +763,10 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     # Non-blocking update check (prints a notice if templates are outdated)
     _updater.check_for_updates(auto=getattr(args, "auto_update", False))
 
+    import datetime as _dt
+    _scan_start_wall = _dt.datetime.now()
     print(f"[*] Scan ID: {current_scan_id}")
+    print(f"[*] Started: {_scan_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"[*] Target:  {target}")
     print(f"[*] Depth:   {config.max_depth}  |  Max pages: {config.max_pages}", end="")
     if mode_tags:
@@ -794,7 +877,13 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         rps_hint = f"  (~{rate:.1f} pages/s)" if rate >= 1 else f"  (~{dur / pages:.0f}s/page)"
     else:
         rps_hint = ""
-    print(f"\n{_G}[+] Scan complete{_R} in {dur:.1f}s{rps_hint}")
+    _scan_end_wall = _dt.datetime.now()
+    _mins, _secs = divmod(int(dur), 60)
+    _dur_fmt = f"{_mins}m {_secs}s" if _mins else f"{_secs}s"
+    print(f"\n{_G}[+] Scan complete{_R}")
+    print(f"[+] Started:        {_scan_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[+] Finished:       {_scan_end_wall.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[+] Duration:       {_dur_fmt}  ({dur:.1f}s){rps_hint}")
     print(f"[+] Pages crawled:  {pages}")
     print(f"[+] Findings:       {summary['total_findings']} total")
     for severity, count in summary["by_severity"].items():
@@ -1054,6 +1143,10 @@ def _build_modules(args) -> list[str] | None:
             modules = [m.__name__.split(".")[-1] for m in ALL_MODULES if m.__name__.split(".")[-1] != "templates"]
         else:
             modules = [m for m in modules if m != "templates"]
+    # --nuclei-templates forces the templates module on even when a profile
+    # excluded it (e.g. --profile quick uses _INJECTION_MODULES only)
+    if getattr(args, "nuclei_templates", False) and modules and "templates" not in modules:
+        modules = modules + ["templates"]
     return modules
 
 

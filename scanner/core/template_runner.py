@@ -501,11 +501,16 @@ def _get_part(part: str, header_name: str, status: int, body: str, headers: dict
         return body
     if part == "status":
         return str(status)
+    if part in ("response", "all"):
+        headers_str = " ".join(f"{k}: {v}" for k, v in headers.items())
+        return f"{headers_str}\n{body}"
     if part == "header":
         if header_name:
             return headers.get(header_name, headers.get(header_name.lower(), ""))
         return " ".join(f"{k}: {v}" for k, v in headers.items())
-    return body
+    if part in ("interactsh_protocol", "interactsh_request", "interactsh_host"):
+        return ""
+    return ""
 
 
 def _substitute(tpl: str, variables: dict) -> str:

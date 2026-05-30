@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/post_deploy_scan.py"
+            "command": "python3 /Users/zulhilmirahmat/Development/Programming/Personal/KageSec/.claude/hooks/post_deploy_scan.py"
           }
         ]
       }

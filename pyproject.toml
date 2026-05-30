@@ -64,11 +64,29 @@ dev = [
 claude = [
     "mcp>=1.0",
 ]
+openai = [
+    "openai>=1.0",
+]
+gemini = [
+    "google-generativeai>=0.7",
+]
+mistral = [
+    "mistralai>=1.0",
+]
+all-ai = [
+    "openai>=1.0",
+    "google-generativeai>=0.7",
+    "mistralai>=1.0",
+    "mcp>=1.0",
+]
 all = [
     "playwright>=1.44",
     "pyotp>=2.9",
     "websockets>=12.0",
     "dnspython>=2.6",
+    "openai>=1.0",
+    "google-generativeai>=0.7",
+    "mistralai>=1.0",
     "mcp>=1.0",
 ]
 

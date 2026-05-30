@@ -1,6 +1,6 @@
 import json
-import anthropic
 from scanner.core.scan_result import Finding, ScanResult
+from scanner.ai.provider import complete as ai_complete
 
 _BATCH_SIZE = 10
 
@@ -32,23 +32,21 @@ _DEFAULT_VERDICT = {
 }
 
 
-def verify_findings(scan_result: ScanResult, api_key: str) -> ScanResult:
+def verify_findings(scan_result: ScanResult, api_key: str, provider: str = "anthropic", model: str | None = None) -> ScanResult:
     if not scan_result.findings:
         return scan_result
 
-    client = anthropic.Anthropic(api_key=api_key)
     findings = scan_result.findings
-
     for i in range(0, len(findings), _BATCH_SIZE):
         batch = findings[i : i + _BATCH_SIZE]
-        verdicts = _analyze_batch(client, batch)
+        verdicts = _analyze_batch(batch, api_key, provider, model)
         for finding, verdict in zip(batch, verdicts):
             _apply_verdict(finding, verdict, scan_result)
 
     return scan_result
 
 
-def _analyze_batch(client: anthropic.Anthropic, batch: list[Finding]) -> list[dict]:
+def _analyze_batch(batch: list[Finding], api_key: str, provider: str, model: str | None) -> list[dict]:
     payload = [
         {
             "vulnerability": f.title,
@@ -62,14 +60,13 @@ def _analyze_batch(client: anthropic.Anthropic, batch: list[Finding]) -> list[di
         for f in batch
     ]
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024 + 512 * len(batch),
+    raw = ai_complete(
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": json.dumps(payload)}],
-    )
-
-    raw = message.content[0].text.strip()
+        user=json.dumps(payload),
+        api_key=api_key,
+        provider=provider,
+        model=model,
+    ).strip()
     if raw.startswith("```"):
         parts = raw.split("```")
         raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw

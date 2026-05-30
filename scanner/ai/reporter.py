@@ -1,14 +1,12 @@
-import anthropic
 from scanner.core.scan_result import ScanResult
+from scanner.ai.provider import complete as ai_complete
 
 SYSTEM_PROMPT = """You are a security report writer for a professional pentesting firm.
 Write clear, actionable security reports that developers and engineering managers can understand.
 Be factual, not alarmist. Prioritize by business risk, not just CVSS score."""
 
 
-def generate_report(scan_result: ScanResult, api_key: str) -> str:
-    client = anthropic.Anthropic(api_key=api_key)
-
+def generate_report(scan_result: ScanResult, api_key: str, provider: str = "anthropic", model: str | None = None) -> str:
     active_findings = [f for f in scan_result.findings if not f.false_positive_suppressed]
 
     findings_text = "\n\n".join([
@@ -42,11 +40,10 @@ Write the report in markdown with these sections:
 3. Findings (one subsection per finding with: description, evidence, AI analysis, remediation steps)
 4. Recommendations (top 3 prioritized actions)"""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
+    return ai_complete(
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
+        user=prompt,
+        api_key=api_key,
+        provider=provider,
+        model=model,
     )
-
-    return message.content[0].text

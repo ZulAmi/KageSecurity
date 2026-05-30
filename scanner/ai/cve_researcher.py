@@ -26,7 +26,7 @@ import re
 import json
 import time
 import hashlib
-import anthropic
+from scanner.ai.provider import complete as ai_complete
 
 _CACHE_DIR = os.path.expanduser("~/.kagesec/template_cache")
 _CACHE_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
@@ -158,7 +158,7 @@ def _safe_filename(name: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate_templates(fingerprints: dict[str, str], api_key: str) -> str | None:
+def generate_templates(fingerprints: dict[str, str], api_key: str, provider: str = "anthropic", model: str | None = None) -> str | None:
     """
     Return a path to a directory of YAML templates for this tech stack.
     Uses cache if fresh; calls Claude once on a miss.
@@ -181,14 +181,13 @@ def generate_templates(fingerprints: dict[str, str], api_key: str) -> str | None
     )
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
+        raw = ai_complete(
             system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = message.content[0].text.strip()
+            user=prompt,
+            api_key=api_key,
+            provider=provider,
+            model=model,
+        ).strip()
         if raw.startswith("```"):
             parts = raw.split("```")
             raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw

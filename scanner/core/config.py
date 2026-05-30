@@ -38,6 +38,8 @@ class ScanConfig:
     template_dirs: Optional[List[str]] = None
     nuclei_templates: bool = False             # Include ~10k Nuclei community templates (slow without AI key)
     api_key: Optional[str] = None
+    ai_provider: Optional[str] = None    # anthropic | openai | gemini | mistral | ollama
+    ai_model: Optional[str] = None       # optional model override
     proxy: Optional[str] = None              # HTTP/HTTPS proxy URL (e.g. http://127.0.0.1:8080)
     passive: bool = False                    # Passive mode — no injection, headers/cookies/content only
     include_patterns: List[str] = field(default_factory=list)   # Glob patterns — only crawl matching URLs
