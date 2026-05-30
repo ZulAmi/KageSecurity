@@ -35,7 +35,7 @@ The template match rate is comparable (24 vs 25). The 38 additional findings are
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
-![Version](https://img.shields.io/badge/version-0.2.1--beta-orange)
+![Version](https://img.shields.io/badge/version-0.2.2--beta-orange)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
@@ -54,7 +54,7 @@ I know Nuclei exists. It's great. It's the industry open-source standard and Pro
 
 So I built KageSec instead — open-source, AI-powered, and free. It runs the same categories of checks, uses Nuclei-compatible templates, and adds Claude AI on top to verify whether findings are actually exploitable (so you're not manually triaging 200 false positives at 11pm).
 
-Then I took it further. KageSec ships a purpose-built Go template engine (`kagesec-engine`) that runs 10,000+ templates concurrently with 50 goroutines, streams findings in real-time, and scores each result with a confidence value (0.0–1.0) instead of Nuclei's binary match/no-match. It fingerprints your target stack and runs the most relevant templates first — so even a partial scan surfaces the highest-value findings. In testing: 7,417 templates against a live target in 73 seconds.
+Then I took it further. KageSec ships a purpose-built Go template engine (`kagesec-engine`) that runs 7,400+ HTTP templates concurrently with 50 goroutines, streams findings in real-time, and scores each result with a confidence value (0.0–1.0) instead of Nuclei's binary match/no-match. It fingerprints your target stack and runs the most relevant templates first — so even a partial scan surfaces the highest-value findings. In testing: 7,417 templates against a live target in 73 seconds.
 
 Zero subscription fees. Zero per-seat pricing. Zero "contact us for enterprise". Just clone it and run it.
 
@@ -80,13 +80,22 @@ In benchmark testing against a live target: **7,417 HTTP templates in ~2 minutes
 
 ### Building the engine
 
+**pip install users:** The binary is already bundled — nothing to build.
+
+If you cloned the repo or want to rebuild:
+
 ```bash
 # Requires Go 1.22+
 cd engine
 go build -o kagesec-engine .
 ```
 
-The Python scanner auto-detects the binary at `engine/kagesec-engine` or anywhere in `PATH`. If the binary is not found, it falls back to the Python template runner automatically — no configuration needed.
+The Python scanner looks for the binary in this order:
+1. `scanner/_bin/kagesec-engine` — bundled (pip install)
+2. `engine/kagesec-engine` — dev / cloned repo
+3. Anywhere in `PATH`
+
+If none are found, it falls back to the Python template runner automatically.
 
 ### Cross-compiling for CI / Docker
 
@@ -141,6 +150,8 @@ Check `reports/` when it's done.
 ```bash
 pip install kagesec
 ```
+
+The `kagesec-engine` Go binary is bundled in the wheel — no manual build step required. After install, `kagesec scan` automatically uses it.
 
 Want the full experience?
 
