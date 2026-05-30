@@ -395,13 +395,15 @@ p { font-size: 11px; color: #374151; line-height: 1.6; margin-bottom: 8px; }
   <p>
     A total of <strong>{{ findings|length }} finding{{ 's' if findings|length != 1 else '' }}</strong> were reported.
     {% if findings %}
-    The highest risk score was
-    <strong>{{ "%.1f"|format(findings|map(attribute='risk_score')|max) }}</strong>,
-    the lowest was
-    <strong>{{ "%.1f"|format(findings|map(attribute='risk_score')|min) }}</strong>,
-    and the average was
-    <strong>{{ "%.1f"|format((findings|sum(attribute='risk_score')) / (findings|length)) }}</strong>
-    (out of 10).
+    {% set crits   = findings | selectattr('severity.value', 'equalto', 'critical') | list | length %}
+    {% set highs   = findings | selectattr('severity.value', 'equalto', 'high')     | list | length %}
+    {% set mediums = findings | selectattr('severity.value', 'equalto', 'medium')   | list | length %}
+    {% set lows    = findings | selectattr('severity.value', 'equalto', 'low')      | list | length %}
+    Severity breakdown:
+    <strong>{{ crits }} Critical</strong>,
+    <strong>{{ highs }} High</strong>,
+    <strong>{{ mediums }} Medium</strong>,
+    <strong>{{ lows }} Low</strong>.
     {% endif %}
   </p>
 
@@ -504,7 +506,8 @@ p { font-size: 11px; color: #374151; line-height: 1.6; margin-bottom: 8px; }
         <th style="width:24px">No.</th>
         <th>Title</th>
         <th style="width:68px">Severity</th>
-        <th style="width:58px">Risk Score</th>
+        <th style="width:52px">CVSS</th>
+        <th style="width:64px">Confidence</th>
         <th style="width:72px">AI Verdict</th>
         <th style="width:50px">Status</th>
       </tr>
@@ -518,7 +521,8 @@ p { font-size: 11px; color: #374151; line-height: 1.6; margin-bottom: 8px; }
           <span class="muted" style="font-size:9.5px">{{ f.url|truncate(75) }}</span>
         </td>
         <td><span class="badge badge-{{ f.severity.value }}">{{ f.severity.value }}</span></td>
-        <td>{{ "%.1f"|format(f.risk_score) }}/10</td>
+        <td>{{ "%.1f"|format(f.cvss_display) }}{% if f.cvss_is_estimated %}*{% endif %}</td>
+        <td>{{ "%.0f"|format(f.confidence * 100) }}%</td>
         <td>{{ f.ai_verdict or "—" }}</td>
         <td>Open</td>
       </tr>
@@ -543,11 +547,10 @@ p { font-size: 11px; color: #374151; line-height: 1.6; margin-bottom: 8px; }
     </div>
     <div class="finding-body">
       <div class="finding-meta-row">
-        <span><strong>Risk Score</strong> {{ "%.1f"|format(f.risk_score) }}/10</span>
-        {% if f.cwe %}<span><strong>CWE</strong> {{ f.cwe }}</span>{% endif %}
-        {% if f.cvss %}<span><strong>CVSS</strong> {{ "%.1f"|format(f.cvss) }}</span>{% endif %}
-        {% if f.owasp_category %}<span><strong>OWASP</strong> {{ f.owasp_category }}</span>{% endif %}
+        <span><strong>CVSS</strong> {{ "%.1f"|format(f.cvss_display) }}{% if f.cvss_is_estimated %} <span style="font-size:9px;color:#94a3b8">(est.)</span>{% endif %}</span>
         <span><strong>Confidence</strong> {{ "%.0f"|format(f.confidence * 100) }}%</span>
+        {% if f.cwe %}<span><strong>CWE</strong> {{ f.cwe }}</span>{% endif %}
+        {% if f.owasp_category %}<span><strong>OWASP</strong> {{ f.owasp_category }}</span>{% endif %}
         <span><strong>Status</strong> Open</span>
       </div>
 
@@ -702,13 +705,21 @@ p { font-size: 11px; color: #374151; line-height: 1.6; margin-bottom: 8px; }
     </tbody>
   </table>
 
-  <div class="sub-title">Appendix C — Risk Score</div>
+  <div class="sub-title">Appendix C — CVSS &amp; Confidence</div>
   <p>
-    Each finding is assigned a risk score from 0–10 derived from the CVSS base score
-    (when available), severity class, confidence level, and AI exploitability assessment.
-    Scores of <strong>7.0+</strong> warrant immediate attention; <strong>4.0–6.9</strong>
-    should be addressed in the next sprint; <strong>below 4.0</strong> can be tracked
-    as a security backlog item.
+    Each finding shows two independent values, consistent with industry practice (Burp Suite, OWASP ZAP):
+  </p>
+  <p>
+    <strong>CVSS</strong> — The base severity score (0–10). When a CVE or template provides an
+    official CVSS score it is used directly. Otherwise an estimate is derived from the severity
+    class (Critical ≈ 9.0, High ≈ 7.0, Medium ≈ 5.0, Low ≈ 3.0) and marked with an asterisk (*).
+  </p>
+  <p>
+    <strong>Confidence</strong> — How certain the scanner is that the finding is real, expressed
+    as a percentage. Derived from matcher specificity: regex matches score higher than word matches;
+    corroborating signals (status code + body content) score higher than a single match.
+    AI-verified true positives carry higher confidence; AI-dismissed findings carry lower confidence.
+    Confidence does not change the CVSS score — it is a separate signal for triage prioritisation.
   </p>
   <div class="page-footer"><span>KageSec Security Report</span><span>{{ target }}</span></div>
 </div>
@@ -726,20 +737,9 @@ def _sev_bg(sev: str) -> str:
     return _SEV_BG.get(sev, "#F8FAFC")
 
 
-def _risk_score(f: Finding) -> float:
-    """Derive a 0–10 risk score from CVSS or severity + confidence."""
-    if f.cvss is not None:
-        base = float(f.cvss)
-    else:
-        base = {
-            "critical": 9.0, "high": 7.0, "medium": 5.0, "low": 3.0, "info": 1.5
-        }.get(f.severity.value, 3.0)
-    if f.ai_verdict == "true_positive":
-        base = min(10.0, base + 0.3)
-    elif f.ai_verdict == "false_positive":
-        base = max(0.0, base - 1.5)
-    base *= f.confidence
-    return round(min(10.0, max(0.0, base)), 1)
+_SEV_CVSS_FALLBACK = {
+    "critical": 9.0, "high": 7.0, "medium": 5.0, "low": 3.0, "info": 1.5
+}
 
 
 def generate_pdf(
@@ -768,10 +768,15 @@ def generate_pdf(
     active = [f for f in scan_result.findings if not f.false_positive_suppressed]
 
     class _Proxy:
-        """Wraps a Finding and adds a computed risk_score attribute."""
+        """Wraps a Finding, adding cvss_display and cvss_is_estimated for the template."""
         def __init__(self, f: Finding):
             self._f = f
-            self.risk_score = _risk_score(f)
+            if f.cvss is not None:
+                self.cvss_display = round(float(f.cvss), 1)
+                self.cvss_is_estimated = False
+            else:
+                self.cvss_display = _SEV_CVSS_FALLBACK.get(f.severity.value, 3.0)
+                self.cvss_is_estimated = True
         def __getattr__(self, item):
             return getattr(self._f, item)
 
