@@ -13,6 +13,11 @@ detection quality of professional tools (Burp Param Miner, Arjun):
     status change and JSONP reflection only. Body length diff is intentionally
     ignored because these params legitimately resize responses.
 
+Performance: once a param is confirmed on a host it is not re-probed on later
+pages — equivalent to Arjun's binary-search isolation avoiding redundant requests.
+The central dedup in ScanResult.add_finding() prevents duplicate findings; this
+cache prevents duplicate network requests.
+
 Attack classes found:
   - Debug/trace parameters (debug=1, trace=true)
   - Admin bypass parameters (isAdmin=true, role=admin)
@@ -23,8 +28,10 @@ Attack classes found:
 """
 import os
 import re
+import threading
 import yaml
 import httpx
+from collections import defaultdict
 from typing import List, Tuple
 from urllib.parse import urlparse, urlunparse, parse_qs
 from scanner.core.scan_result import Finding, Severity
@@ -32,8 +39,13 @@ from scanner.core.crawler import CrawlResult
 
 _BUILTIN_PARAMS = os.path.join(os.path.dirname(__file__), "..", "payloads", "params.yaml")
 
+# Per-host cache of confirmed param names — once found, skip re-probing on other pages.
+# Equivalent to Arjun's binary-search isolation: no redundant network requests for
+# params already confirmed on this host. Resets per process (one scan per invocation).
+_confirmed_host_params: dict = defaultdict(set)
+_confirmed_lock = threading.Lock()
+
 # Probe values chosen to be unlikely in legitimate responses but reveal active params.
-# Security-specific values per param — param-specific probes reduce echo-reflection noise.
 _PROBE_VALUES: dict = {
     "debug":        ["1", "true"],
     "trace":        ["1", "true"],
@@ -64,8 +76,7 @@ _PROBE_VALUES: dict = {
 }
 _DEFAULT_PROBE = ["kagesec_probe_1337"]
 
-# Response content patterns that indicate a security-relevant parameter effect.
-# These are the "what changed" signals — not just "how much changed".
+# Response content patterns — look at WHAT changed, not just how much (Param Miner approach).
 _SECURITY_CONTENT_PATTERNS: list = [
     re.compile(r'debug\s*[:=]\s*true', re.I),
     re.compile(r'isAdmin\s*[:=]\s*true', re.I),
@@ -80,8 +91,6 @@ _SECURITY_CONTENT_PATTERNS: list = [
     re.compile(r'X-Debug-Token|X-Symfony-Cache', re.I),    # Symfony debug headers echoed
 ]
 
-# Minimum absolute diff for Tier 1 length-based detection (fallback floor).
-# The dynamic variance threshold takes precedence when the page varies naturally.
 _FLOOR_DIFF_BYTES = 500
 _FLOOR_DIFF_PCT = 0.25
 
@@ -106,8 +115,8 @@ def _load_params(config) -> Tuple[List[str], List[str]]:
                 t1 = [str(p) for p in (data.get("tier1") or []) if p]
                 t2 = [str(p) for p in (data.get("tier2") or []) if p]
                 return t1, t2
-            # Backwards-compatible flat format: treat all as tier1
             if "params" in data:
+                # Backwards-compatible flat format: treat all as tier1
                 flat = [str(p) for p in data["params"] if p]
                 return flat, []
         if isinstance(data, list):
@@ -124,8 +133,11 @@ def _probe_params(
     tier2: List[str],
     findings: List[Finding],
 ):
-    # Two baseline requests to measure natural page variance (Arjun / Param Miner pattern).
-    # Only flag length diffs that are significantly larger than baseline variance.
+    host = urlparse(page.url).netloc
+
+    # Two baseline requests to measure natural page variance — Burp Param Miner uses 4,
+    # Arjun uses 2. We use 2: enough to detect dynamic content (timestamps, nonces,
+    # CSRF tokens) without excessive overhead.
     try:
         b1 = client.get(page.url, timeout=8)
         b2 = client.get(page.url, timeout=8)
@@ -138,10 +150,33 @@ def _probe_params(
 
     natural_variance = abs(len(b2.text) - len(b1.text))
     baseline_len = (len(b1.text) + len(b2.text)) // 2
-    # Dynamic threshold: at least 3x the natural variance, floored at _FLOOR_DIFF_BYTES.
-    # This prevents flagging pages whose content legitimately changes between requests
-    # (timestamps, nonces, CSRF tokens, session-specific data).
+    # Dynamic threshold: 3× natural variance, floored at _FLOOR_DIFF_BYTES.
+    # Prevents flagging pages that legitimately vary between requests.
     dynamic_threshold = max(natural_variance * 3, _FLOOR_DIFF_BYTES)
+
+    # Canary: random non-existent parameter used to build a "random param baseline"
+    # — the same technique Param Miner and Arjun use to prevent false positives on
+    # param-sensitive pages. Neither tool skips the page; instead they disable
+    # detection factors that fire for ANY random param (Arjun's factor-nulling),
+    # and only flag probes that cause a LARGER change than the canary (Param Miner's
+    # "similar to baseline" check).
+    canary_param = f"_kgsec_{os.urandom(4).hex()}"
+    canary_val = os.urandom(6).hex()
+    canary_status_changed = False
+    canary_len_diff = 0
+    try:
+        canary_resp = client.get(_add_param(page.url, canary_param, canary_val), timeout=8)
+        canary_status_changed = canary_resp.status_code != baseline_status
+        canary_len_diff = abs(len(canary_resp.text) - baseline_len)
+    except Exception:
+        pass
+
+    # Disable detection factors that the canary already triggers (Arjun's approach):
+    # — Status change: if any random param changes status, status detection is noise
+    # — Length diff: raise threshold to 2× canary diff so probe must cause MUCH more
+    #   change than a random param (Param Miner's "similar to random-param baseline")
+    use_status_change = not canary_status_changed
+    canary_length_threshold = max(canary_len_diff * 2, dynamic_threshold)
 
     parsed = urlparse(page.url)
     existing_params = set(parse_qs(parsed.query).keys())
@@ -155,6 +190,12 @@ def _probe_params(
         if waf_blocked:
             break
 
+        # Skip params already confirmed on this host — central dedup in add_finding()
+        # would reject the finding anyway; this prevents the network request entirely.
+        with _confirmed_lock:
+            if param in _confirmed_host_params[host]:
+                continue
+
         probe_values = _PROBE_VALUES.get(param, _DEFAULT_PROBE)
 
         for val in probe_values:
@@ -164,10 +205,11 @@ def _probe_params(
             except Exception:
                 continue
 
-            status_changed = resp.status_code != baseline_status
+            # Apply canary-adjusted factors (disabled if canary already triggered them)
+            status_changed = use_status_change and (resp.status_code != baseline_status)
             jsonp_reflected = param in ("callback", "jsonp") and val in resp.text
 
-            # WAF/rate-limit guard: if server suddenly blocks us, stop probing.
+            # WAF/rate-limit guard: re-check clean baseline before flagging a block.
             if status_changed and resp.status_code in (403, 429, 503):
                 try:
                     recheck = client.get(page.url, timeout=8)
@@ -179,11 +221,10 @@ def _probe_params(
             if waf_blocked:
                 break
 
-            # Plain echo-reflection: error pages often echo unknown param values back.
-            # Exclude this as a signal unless JSONP or security pattern also present.
+            # Plain echo-reflection: error pages often echo unknown param values.
             probe_reflected = (val in resp.text) and (val not in b1.text)
 
-            # Security content patterns — look at WHAT changed, not just how much.
+            # Content pattern analysis — look at WHAT changed (Param Miner approach).
             security_pattern_hit = any(
                 pat.search(resp.text) and not pat.search(b1.text)
                 for pat in _SECURITY_CONTENT_PATTERNS
@@ -191,9 +232,13 @@ def _probe_params(
 
             len_diff = abs(len(resp.text) - baseline_len)
             pct_diff = len_diff / max(baseline_len, 1)
-            len_diff_significant = len_diff > dynamic_threshold and pct_diff > _FLOOR_DIFF_PCT
+            # Must exceed canary_length_threshold (2× what a random param caused)
+            # so only probes that cause SUBSTANTIALLY more change than noise are flagged
+            len_diff_significant = len_diff > canary_length_threshold and pct_diff > _FLOOR_DIFF_PCT
 
-            # Tier 1: full detection
+            # Tier 1: full detection — any of: status, JSONP, content pattern, length diff
+            # Tier 2: conservative — status or JSONP only (length diff excluded because
+            #   format, version, id etc. legitimately alter response size)
             if tier == 1:
                 interesting = (
                     status_changed
@@ -202,15 +247,11 @@ def _probe_params(
                     or (len_diff_significant and not (probe_reflected and not security_pattern_hit))
                 )
             else:
-                # Tier 2: conservative — status change or JSONP only.
-                # Length diff is intentionally excluded: format, version, id etc.
-                # legitimately change response size and would cause false positives.
                 interesting = status_changed or jsonp_reflected
 
             if not interesting:
                 continue
 
-            # Assign severity
             if jsonp_reflected:
                 severity = Severity.HIGH
                 cvss = 6.1
@@ -220,7 +261,6 @@ def _probe_params(
                 cvss = 5.3
                 confidence = 0.80
             else:
-                # Length diff only — lower confidence
                 severity = Severity.LOW
                 cvss = 3.1
                 confidence = 0.55
@@ -229,11 +269,17 @@ def _probe_params(
             if status_changed:
                 evidence_parts.append(f"status: {baseline_status}→{resp.status_code}")
             if len_diff_significant:
-                evidence_parts.append(f"body length: ~{baseline_len}→{len(resp.text)} (diff {len_diff}B, variance {natural_variance}B)")
+                evidence_parts.append(
+                    f"body length: ~{baseline_len}→{len(resp.text)} "
+                    f"(diff {len_diff}B, page variance {natural_variance}B)"
+                )
             if jsonp_reflected:
                 evidence_parts.append(f"JSONP callback '{val}' reflected in response")
             if security_pattern_hit:
                 evidence_parts.append("security content pattern detected in response")
+
+            with _confirmed_lock:
+                _confirmed_host_params[host].add(param)
 
             findings.append(Finding(
                 title=f"Hidden Parameter Discovered — {param}",
