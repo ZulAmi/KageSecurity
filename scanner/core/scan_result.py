@@ -110,20 +110,21 @@ class ScanResult:
         """
         Dedup key matching industry practice (Burp Suite, OWASP ZAP, Astra):
 
-        • Site-wide observations (parameter=None) — e.g. missing headers, CORS policy,
-          TLS issues: keyed on (title, host) so they fire once per target regardless of
-          how many pages were crawled.
+        • No parameter: keyed on (title, host) — "Missing CSP" fires once per target.
 
-        • Active findings (parameter set) — e.g. IDOR, XSS, SQLi: keyed on
-          (title, host, path, parameter), intentionally ignoring the specific query-param
-          value. This collapses IDOR on /post?id=1, /post?id=2 … /post?id=18 into one
-          finding for "IDOR on /post via id parameter".
+        • With parameter: keyed on (title, host, parameter) — path is intentionally
+          excluded so the same vulnerability class on the same parameter collapses
+          regardless of which page or resource ID triggered it.
+          Examples:
+            - IDOR via productId on /product?id=1 and /product?id=18 → one finding
+            - Cookie missing HttpOnly on /page1 and /page2 → one finding per cookie name
+            - Hidden param "format" found on / and /catalog → one finding
+            - XSS via "q" on /search and /catalog/search → one finding
         """
-        parsed = urlparse(finding.url)
-        host = parsed.netloc
+        host = urlparse(finding.url).netloc
         if finding.parameter is None:
             return (finding.title, host)
-        return (finding.title, host, parsed.path, finding.parameter)
+        return (finding.title, host, finding.parameter)
 
     def add_finding(self, finding: Finding) -> bool:
         """

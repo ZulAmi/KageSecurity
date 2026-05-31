@@ -1,74 +1,51 @@
-params:
+# Parameter discovery wordlist — two-tier classification
+#
+# Tier 1: Security-critical parameters.
+#   Full detection: status code change, JSONP reflection, security content patterns,
+#   and significant body length diff (above measured baseline variance).
+#
+# Tier 2: Medium-confidence parameters.
+#   Conservative detection: status code change or JSONP reflection only.
+#   Body length diff is ignored — these params legitimately alter response size.
+#
+# Removed (~35 noise params): lang, locale, timezone, currency, utm_*, sort, order,
+# limit, offset, page, cursor, search, q, s, find, filter, view, template, theme, layout,
+# ref, via, from, source — these are built-in app params or tracking params with no
+# security relevance and consistently cause false positives on e-commerce sites.
+
+tier1:
   # Debug / development flags
   - debug
-  - test
-  - dev
-  - admin
   - trace
   - verbose
   - log
-  - mode
+  - dev
+  - test
   - env
   - environment
+  - mode
   # Access control bypass
-  - role
+  - admin
   - isAdmin
   - is_admin
+  - role
   - superuser
   - privileged
   - bypass
   - override
   - internal
-  # Output format / content negotiation
-  - format
-  - output
-  - type
-  - content_type
-  - accept
+  # JSONP / callback injection
   - callback
   - jsonp
-  - wrap
-  # Data retrieval / filtering
-  - id
-  - user
-  - user_id
-  - userid
-  - uid
-  - username
-  - email
-  - account
-  - profile
-  - token
-  - key
-  - api_key
-  - apikey
-  - secret
-  - password
-  # Feature flags
-  - feature
-  - flag
-  - beta
-  - preview
-  - experimental
-  - enable
-  - disable
-  # Injection-prone
-  - search
-  - q
-  - query
-  - s
-  - find
-  - filter
-  - where
-  - sort
-  - order
-  - orderby
-  - limit
-  - offset
-  - page
-  - per_page
-  - cursor
-  # File / path traversal
+  # Open redirect / SSRF vectors
+  - redirect
+  - return
+  - next
+  - to
+  - url
+  - src
+  - href
+  # File / path inclusion (LFI / path traversal)
   - file
   - filename
   - path
@@ -78,36 +55,48 @@ params:
   - load
   - read
   - import
-  - url
-  - src
-  - href
-  - redirect
-  - return
-  - next
-  - to
-  # Version / API
-  - version
-  - v
-  - api_version
-  - lang
-  - language
-  - locale
-  - timezone
-  - currency
-  # Misc
-  - ref
-  - source
-  - from
-  - via
-  - utm_source
-  - utm_campaign
-  - view
-  - template
-  - theme
-  - layout
-  - action
-  - method
-  - op
+  # Command / code execution
   - cmd
   - command
   - exec
+  - op
+  - action
+  # Sensitive data exposure
+  - token
+  - key
+  - api_key
+  - apikey
+  - secret
+  - password
+  - account
+  - user_id
+  - uid
+
+tier2:
+  # Output format / content negotiation — can legitimately change body size
+  - format
+  - output
+  - type
+  - content_type
+  - accept
+  - wrap
+  # Version / API negotiation
+  - version
+  - v
+  - api_version
+  - method
+  # Data retrieval — common built-in params, flag only on status change
+  - id
+  - user
+  - userid
+  - username
+  - email
+  - profile
+  # Feature flags — conservative, flag only on clear behaviour change
+  - feature
+  - flag
+  - beta
+  - preview
+  - experimental
+  - enable
+  - disable
