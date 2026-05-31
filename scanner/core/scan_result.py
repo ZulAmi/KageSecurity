@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict
@@ -96,49 +97,57 @@ class ScanResult:
     scan_duration_seconds: float = 0.0
     errors: List[str] = field(default_factory=list)
 
-    def add_finding(self, finding: Finding):
-        self.findings.append(finding)
+    def __post_init__(self):
+        # Internal dedup state — not part of the data model, not serialised
+        self._dedup_map: dict = {}
+        self._dedup_lock = threading.Lock()
+        # Seed map from any pre-existing findings (e.g. loaded from checkpoint)
+        for f in self.findings:
+            self._dedup_map.setdefault(ScanResult._dedup_key(f), f)
+
+    @staticmethod
+    def _dedup_key(finding: Finding) -> tuple:
+        """
+        Dedup key matching industry practice (Burp Suite, OWASP ZAP, Astra):
+
+        • Site-wide observations (parameter=None) — e.g. missing headers, CORS policy,
+          TLS issues: keyed on (title, host) so they fire once per target regardless of
+          how many pages were crawled.
+
+        • Active findings (parameter set) — e.g. IDOR, XSS, SQLi: keyed on
+          (title, host, path, parameter), intentionally ignoring the specific query-param
+          value. This collapses IDOR on /post?id=1, /post?id=2 … /post?id=18 into one
+          finding for "IDOR on /post via id parameter".
+        """
+        parsed = urlparse(finding.url)
+        host = parsed.netloc
+        if finding.parameter is None:
+            return (finding.title, host)
+        return (finding.title, host, parsed.path, finding.parameter)
+
+    def add_finding(self, finding: Finding) -> bool:
+        """
+        Add a finding with real-time deduplication. Thread-safe.
+        Returns True if the finding was accepted, False if deduplicated away.
+
+        Callers can use the return value to decide whether to show a live notification.
+        """
+        key = ScanResult._dedup_key(finding)
+        with self._dedup_lock:
+            existing = self._dedup_map.get(key)
+            if existing is not None:
+                # Upgrade to higher severity if a better signal arrives later
+                if _SEVERITY_RANK[finding.severity] < _SEVERITY_RANK[existing.severity]:
+                    self._dedup_map[key] = finding
+                return False
+            self._dedup_map[key] = finding
+            self.findings.append(finding)
+            return True
 
     def deduplicate(self):
-        """
-        Three-pass deduplication:
-        1. Drop exact duplicates (same url+param+title).
-        2. Per (url, param) keep only the highest-severity finding — SQLi wins over XSS.
-        3. Passive findings (parameter=None) are server-wide observations: keep only one
-           instance per title across the whole scan (e.g. "Missing CSP" fires once, not
-           once per crawled page).
-        """
-        # Pass 1: exact dedup
-        seen: dict[tuple, Finding] = {}
-        for f in self.findings:
-            key = (_normalise_url(f.url), f.parameter, f.title)
-            existing = seen.get(key)
-            if existing is None or _SEVERITY_RANK[f.severity] < _SEVERITY_RANK[existing.severity]:
-                seen[key] = f
-
-        # Pass 2: per (url, param) keep highest severity
-        best: dict[tuple, Finding] = {}
-        for f in seen.values():
-            if f.parameter is None:
-                loc_key = (_normalise_url(f.url), None, f.title)
-            else:
-                loc_key = (_normalise_url(f.url), f.parameter)
-            existing = best.get(loc_key)
-            if existing is None or _SEVERITY_RANK[f.severity] < _SEVERITY_RANK[existing.severity]:
-                best[loc_key] = f
-
-        # Pass 3: for passive findings (no param), one per title across the whole scan
-        global_passive: dict[str, Finding] = {}
-        active_findings = []
-        for f in best.values():
-            if f.parameter is None:
-                existing = global_passive.get(f.title)
-                if existing is None or _SEVERITY_RANK[f.severity] < _SEVERITY_RANK[existing.severity]:
-                    global_passive[f.title] = f
-            else:
-                active_findings.append(f)
-
-        self.findings = active_findings + list(global_passive.values())
+        """Rebuild findings from the dedup map to pick up any severity upgrades."""
+        with self._dedup_lock:
+            self.findings = list(self._dedup_map.values())
 
     def summary(self) -> dict:
         counts = {s.value: 0 for s in Severity}

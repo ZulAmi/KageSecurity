@@ -1,13 +1,8 @@
 import re
-import threading
 import httpx
 from typing import List
-from urllib.parse import urlparse
 from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
-
-_seen: set = set()
-_seen_lock = threading.Lock()
 
 VERSION_HEADERS = ["server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"]
 
@@ -37,17 +32,11 @@ META_PATTERNS = [
 
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     findings = []
-    host = urlparse(page.url).netloc
 
-    # Check version-disclosing response headers (site-wide — dedup by host+header)
+    # Check version-disclosing response headers
     for header in VERSION_HEADERS:
         value = page.headers.get(header, "")
         if value and re.search(r'\d+\.\d+', value):
-            key = (host, header)
-            with _seen_lock:
-                if key in _seen:
-                    continue
-                _seen.add(key)
             findings.append(Finding(
                 title=f"Server Version Disclosed via {header.title()} Header",
                 severity=Severity.LOW,
@@ -70,11 +59,6 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     for pattern, lib_name in JS_LIB_PATTERNS:
         match = re.search(pattern, src_attrs, re.IGNORECASE)
         if match:
-            key = (host, lib_name)
-            with _seen_lock:
-                if key in _seen:
-                    continue
-                _seen.add(key)
             findings.append(Finding(
                 title=f"JavaScript Library Version Disclosed: {lib_name}",
                 severity=Severity.LOW,
@@ -95,11 +79,6 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     for pattern, label in META_PATTERNS:
         match = re.search(pattern, page.body, re.IGNORECASE)
         if match:
-            key = (host, label)
-            with _seen_lock:
-                if key in _seen:
-                    continue
-                _seen.add(key)
             findings.append(Finding(
                 title=f"CMS/Framework Version Disclosed ({label})",
                 severity=Severity.LOW,

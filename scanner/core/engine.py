@@ -467,8 +467,7 @@ def run_scan(
                     try:
                         findings = future.result(timeout=30)
                         for f in findings:
-                            result.add_finding(f)
-                            if finding_callback:
+                            if result.add_finding(f) and finding_callback:
                                 finding_callback(f)
                         completed_pairs.add((page.url, module.__name__))
                         _save_checkpoint(effective_id, completed_pairs)
