@@ -38,7 +38,8 @@ _PROBE_VALUES = {
     "default": ["kagesec_param_probe_1337"],
 }
 
-_MIN_DIFF_BYTES = 500   # minimum body length difference to flag (raised from 150 to cut echo-reflection noise)
+_MIN_DIFF_BYTES = 2000   # minimum absolute body length difference to flag
+_MIN_DIFF_PCT   = 0.20   # also require ≥20% change — filters dynamic pages with small natural variation
 _MIN_DIFF_STATUS = True  # flag if status code changes
 
 
@@ -122,9 +123,10 @@ def _probe_params(page: CrawlResult, client: httpx.Client, params: List[str], fi
             if _waf_blocked:
                 break
 
+            pct_diff = len_diff / max(baseline_len, 1)
             interesting = (
                 status_changed
-                or len_diff > _MIN_DIFF_BYTES
+                or (len_diff > _MIN_DIFF_BYTES and pct_diff > _MIN_DIFF_PCT)
                 or jsonp_reflected
             )
             if not interesting:
