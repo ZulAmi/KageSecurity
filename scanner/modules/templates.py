@@ -78,12 +78,15 @@ def test(page: CrawlResult, client, config=None) -> List[Finding]:
     templates_dirs = _resolve_template_dirs(config, nuclei_opt)
     binary = _engine_binary()
 
+    ai_provider = getattr(config, "ai_provider", "anthropic") if config else "anthropic"
+    ai_model    = getattr(config, "ai_model",    None)        if config else None
+
     # --- AI template selection (with or without Go engine) ---
     selected_files: list[str] | None = None
     if api_key:
         state = _get_state(target)
         fingerprint_page(page, state["fingerprints"])
-        selected_files = _ai_select(state, templates_dirs, api_key)
+        selected_files = _ai_select(state, templates_dirs, api_key, provider=ai_provider, model=ai_model)
 
     # --- Go engine path ---
     if binary:
@@ -309,7 +312,13 @@ def _get_state(target: str) -> dict:
         return _state[target]
 
 
-def _ai_select(state: dict, template_dirs: list[str], api_key: str) -> list[str] | None:
+def _ai_select(
+    state: dict,
+    template_dirs: list[str],
+    api_key: str,
+    provider: str = "anthropic",
+    model: str | None = None,
+) -> list[str] | None:
     if state["select_done"].is_set():
         return state["selected"]
 
@@ -328,7 +337,10 @@ def _ai_select(state: dict, template_dirs: list[str], api_key: str) -> list[str]
             all_templates.extend(load_templates([d]))
 
         from scanner.ai.template_selector import select_templates, summarise_selection
-        selected = select_templates(dict(state["fingerprints"]), all_templates, api_key)
+        selected = select_templates(
+            dict(state["fingerprints"]), all_templates, api_key,
+            provider=provider, model=model,
+        )
         state["selected"] = [t.source_file for t in selected]
         print(f"\n{summarise_selection(state['fingerprints'], selected, len(all_templates))}")
     except Exception:

@@ -64,3 +64,7 @@ class ScanConfig:
     dbms: Optional[str] = None              # Target DBMS hint for SQLi (mysql/postgres/mssql/oracle/sqlite)
     level: int = 1                          # Scan aggressiveness 1-5
     risk: int = 1                           # Risk of side-effects 1-3
+    # Session expiry detection — mirrors StackHawk loggedInIndicator/loggedOutIndicator and ZAP auth strategies
+    login_logged_out_indicator: str = ""    # Regex matching response body when session has expired
+    login_logged_in_indicator: str = ""     # Regex that must be present in body to confirm valid session
+    login_session_check_url: str = ""       # URL to poll for session validity (StackHawk "test path")

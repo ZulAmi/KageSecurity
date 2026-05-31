@@ -67,13 +67,13 @@ def _test_forms(page: CrawlResult, client: httpx.Client, findings: List[Finding]
         if not target_fields:
             continue
 
-        # Get baseline response
+        # Get baseline response to confirm the form submits successfully before probing.
         try:
             baseline = client.request(
                 form["method"].upper(), form["action"], data=inputs, timeout=8
             )
-            baseline_status = baseline.status_code
-            baseline_len = len(baseline.text)
+            if baseline.status_code >= 500:
+                continue
         except Exception:
             continue
 
@@ -88,17 +88,16 @@ def _test_forms(page: CrawlResult, client: httpx.Client, findings: List[Finding]
                 if not resp:
                     continue
 
-                # Look for signs of acceptance: same status as valid form, different content
-                # or error message revealing the value was processed
-                accepted = (
-                    resp.status_code == baseline_status
-                    and abs(len(resp.text) - baseline_len) > 100
-                )
-                # Check for success indicators in response
+                # OWASP WSTG: business logic cannot be automated via body size diff —
+                # a smaller body could mean rejection (correct) or incomplete data (bug).
+                # Only flag when the response contains explicit success indicators that
+                # confirm the boundary value was accepted by the business layer.
+                # This matches the reliable signals professional testers use (Burp, ZAP):
+                # look for state-change evidence in the body, not structural size changes.
                 success_phrases = ["success", "order confirmed", "added to cart", "purchase", "thank you"]
                 has_success = any(p in resp.text.lower() for p in success_phrases)
 
-                if accepted or has_success:
+                if has_success:
                     findings.append(Finding(
                         title=f"Business Logic — Boundary Value Accepted ({label})",
                         severity=Severity.MEDIUM,
@@ -141,7 +140,6 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
     try:
         baseline = client.get(page.url, timeout=8)
         baseline_status = baseline.status_code
-        baseline_len = len(baseline.text)
     except Exception:
         return
 
@@ -152,14 +150,18 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
                 resp = client.get(test_url, timeout=8)
             except Exception:
                 continue
-            if resp.status_code == baseline_status and abs(len(resp.text) - baseline_len) > 100:
+            # Only flag on status code change — a 4xx means the server explicitly rejected
+            # the boundary value (server-side validation exists but may be bypassable).
+            # Body size diff is excluded: OWASP WSTG classifies it as unreliable for
+            # business logic detection since context determines whether acceptance is a bug.
+            if resp.status_code != baseline_status and resp.status_code < 500:
                 findings.append(Finding(
                     title=f"Business Logic — Boundary Value in URL Parameter ({label})",
                     severity=Severity.LOW,
                     url=page.url,
                     parameter=param,
                     payload=value,
-                    evidence=f"URL param '{param}={value}' ({label}) caused response diff: {abs(len(resp.text)-baseline_len)}B",
+                    evidence=f"URL param '{param}={value}' ({label}): status changed {baseline_status}→{resp.status_code}",
                     description=(
                         f"URL parameter '{param}' accepted boundary value '{value}' ({label}). "
                         "Numeric boundary vulnerabilities can be exploited for business logic bypass."

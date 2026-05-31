@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS findings (
     first_seen   REAL NOT NULL,
     last_seen    REAL NOT NULL,
     occurrences  INTEGER DEFAULT 1,
+    prev_scan_id TEXT,
     FOREIGN KEY (scan_id) REFERENCES scans(scan_id)
 );
 
@@ -65,6 +66,11 @@ CREATE INDEX IF NOT EXISTS idx_findings_target  ON findings(target);
 CREATE INDEX IF NOT EXISTS idx_findings_key     ON findings(target, title, url, parameter);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
 """
+
+# Migrate existing DBs: add prev_scan_id column if absent (SQLite ALTER TABLE is additive only)
+_MIGRATIONS = [
+    "ALTER TABLE findings ADD COLUMN prev_scan_id TEXT",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +84,13 @@ def _conn():
     con.row_factory = sqlite3.Row
     try:
         con.executescript(_SCHEMA)
+        # Apply additive migrations (silently skip if column already exists)
+        for stmt in _MIGRATIONS:
+            try:
+                con.execute(stmt)
+                con.commit()
+            except sqlite3.OperationalError:
+                pass
         yield con
         con.commit()
     finally:
@@ -173,6 +186,86 @@ def get_scan_history(target: str, limit: int = 10) -> list[dict]:
             (target, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_previous_scan_keys(target: str) -> set[tuple]:
+    """Return (title, url, parameter) keys from the most recent completed scan for this target.
+
+    Used by classify_scan() to determine New / Repeated / Regressed states.
+    Matches Burp Enterprise's issue-state model and GitLab/DefectDojo dedup standard.
+    """
+    with _conn() as con:
+        last = con.execute(
+            "SELECT scan_id FROM scans WHERE target=? ORDER BY started_at DESC LIMIT 1",
+            (target,),
+        ).fetchone()
+        if not last:
+            return set()
+        rows = con.execute(
+            "SELECT title, url, parameter FROM findings WHERE scan_id=? AND target=?",
+            (last["scan_id"], target),
+        ).fetchall()
+    return {(r["title"], r["url"], r["parameter"] or "") for r in rows}
+
+
+def classify_scan(scan_id: str, result: "ScanResult", target: str) -> dict:
+    """Classify findings into New / Repeated / Regressed / Resolved.
+
+    Modelled on Burp Enterprise issue tracking and ZAP Retest add-on:
+      New       — first time seen for this target
+      Repeated  — present in both previous and current scan (not yet fixed)
+      Regressed — was resolved in an earlier scan but reappeared (occurrences > 1 with a gap)
+      Resolved  — present in previous scan but absent in current scan
+
+    Returns:
+        {
+          "states": {(title, url, param): "new"|"repeated"|"regressed"},
+          "resolved": [(title, url, param), ...]   # findings fixed since last scan
+        }
+    Attaches results to result.scan_states and result.resolved_findings.
+    """
+    prev_keys = get_previous_scan_keys(target)
+    current_keys = {
+        (f.title, f.url, f.parameter or "")
+        for f in result.findings
+        if not f.false_positive_suppressed
+    }
+
+    repeated_keys = current_keys & prev_keys
+    resolved_keys = prev_keys  - current_keys
+
+    # Detect regressions: a finding present in an older scan, absent in the
+    # immediately preceding scan (resolved), but present again now.
+    # Requires at least 3 scans worth of history to be meaningful.
+    regressed_keys: set[tuple] = set()
+    with _conn() as con:
+        # Get the scan before the most recent one (2nd most recent)
+        two_scans = con.execute(
+            "SELECT scan_id FROM scans WHERE target=? ORDER BY started_at DESC LIMIT 2",
+            (target,),
+        ).fetchall()
+        if len(two_scans) == 2:
+            second_last_id = two_scans[1]["scan_id"]
+            older_rows = con.execute(
+                "SELECT title, url, parameter FROM findings WHERE scan_id=? AND target=?",
+                (second_last_id, target),
+            ).fetchall()
+            older_keys = {(r["title"], r["url"], r["parameter"] or "") for r in older_rows}
+            # Regressed = in older scan AND NOT in previous scan AND in current scan
+            regressed_keys = (older_keys - prev_keys) & current_keys
+
+    states: dict[tuple, str] = {}
+    for k in current_keys:
+        if k in regressed_keys:
+            states[k] = "regressed"
+        elif k in repeated_keys:
+            states[k] = "repeated"
+        else:
+            states[k] = "new"
+
+    result.scan_states = states
+    result.resolved_findings = list(resolved_keys)
+    return {"states": states, "resolved": list(resolved_keys)}
 
 
 def trending_summary(target: str) -> dict:

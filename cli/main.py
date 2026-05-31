@@ -98,6 +98,21 @@ def main():
     scan_cmd.add_argument("--login-password", metavar="VALUE", help="Password to login with")
     scan_cmd.add_argument("--login-success", metavar="INDICATOR", help="URL substring or CSS selector post-login")
     scan_cmd.add_argument("--login-totp-secret", metavar="BASE32", help="base32 TOTP secret for 2FA")
+    scan_cmd.add_argument(
+        "--login-logged-out", metavar="REGEX",
+        help="Regex matching response body when session has expired (e.g. 'Sign in|Please login'). "
+             "Mirrors StackHawk loggedOutIndicator / ZAP auth verification strategy.",
+    )
+    scan_cmd.add_argument(
+        "--login-logged-in", metavar="REGEX",
+        help="Regex that must be present in response body to confirm a valid session. "
+             "If absent, scanner re-authenticates (StackHawk loggedInIndicator).",
+    )
+    scan_cmd.add_argument(
+        "--login-session-check", metavar="URL",
+        help="URL to poll every 50 completed module runs to verify session validity "
+             "(StackHawk 'test path' strategy). If omitted, every crawled page is checked.",
+    )
     scan_cmd.add_argument("--openapi", metavar="URL_OR_FILE", help="OpenAPI 3.x/Swagger 2.x spec for API scanning")
     scan_cmd.add_argument("--graphql", metavar="URL", help="GraphQL endpoint URL")
     scan_cmd.add_argument(
@@ -298,6 +313,31 @@ def main():
     import_cmd = sub.add_parser("import-scan", help="Import a previously exported scan checkpoint")
     import_cmd.add_argument("file", help="Exported zip file to import")
 
+    # ------------------------------------------------------------------ schedule
+    schedule_cmd = sub.add_parser("schedule", help="Manage scheduled recurring scans")
+    schedule_sub  = schedule_cmd.add_subparsers(dest="schedule_action")
+
+    sched_add = schedule_sub.add_parser("add", help="Add or replace a scan schedule")
+    sched_add.add_argument("target", help="Target URL to scan on schedule")
+    sched_add.add_argument(
+        "--interval", default="daily",
+        help="Recurrence: hourly | daily | weekly | monthly | cron expression (default: daily)",
+    )
+    sched_add.add_argument("--profile", metavar="NAME", help="Scan profile preset (quick/full/api/stealth)")
+    sched_add.add_argument("--modules", metavar="M1,M2", help="Comma-separated module list (default: all)")
+    sched_add.add_argument("--max-pages", type=int, metavar="N", help="Max pages per scheduled scan")
+    sched_add.add_argument("--level", type=int, choices=[1, 2, 3, 4, 5], help="Scan level (1-5)")
+
+    schedule_sub.add_parser("list", help="List all scheduled scans with next-run times")
+
+    sched_rm = schedule_sub.add_parser("remove", help="Remove a schedule")
+    sched_rm.add_argument("target", help="Target URL to remove")
+
+    schedule_sub.add_parser(
+        "run",
+        help="Run all due schedules now (call from system crontab or nightly CI step)",
+    )
+
     # ------------------------------------------------------------------ history
     history_cmd = sub.add_parser("history", help="Show finding trends from past scans")
     history_cmd.add_argument("target", nargs="?", help="Filter by target URL")
@@ -380,6 +420,10 @@ def main():
 
     if args.command == "history":
         _run_history(args)
+        sys.exit(0)
+
+    if args.command == "schedule":
+        _run_schedule(args)
         sys.exit(0)
 
     if args.command == "suppress":
@@ -660,6 +704,9 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         dbms=getattr(args, "dbms", None),
         level=getattr(args, "level", 1),
         risk=getattr(args, "risk", 1),
+        login_logged_out_indicator=getattr(args, "login_logged_out", "") or "",
+        login_logged_in_indicator=getattr(args, "login_logged_in",  "") or "",
+        login_session_check_url=getattr(args, "login_session_check", "") or "",
     )
 
     current_scan_id = args.resume or str(_uuid.uuid4())
@@ -784,8 +831,6 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     _stats = getattr(args, "stats", False)
     _progress_cb = None
     if _stats and not _no_color:
-        import time as _time
-        _bar_start = _time.monotonic()
 
         def _progress_cb(done: int, total: int, findings: int):
             if total == 0:
@@ -793,13 +838,10 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
             pct = done / total
             filled = int(30 * pct)
             bar = "\033[92m" + "█" * filled + "\033[90m" + "░" * (30 - filled) + "\033[0m"
-            elapsed = _time.monotonic() - _bar_start
-            eta = (elapsed / pct - elapsed) if pct > 0 else 0
             line = (
                 f"\r[{bar}] {pct * 100:5.1f}%  "
                 f"{done}/{total} checks  "
-                f"{findings} finding{'s' if findings != 1 else ''}  "
-                f"eta {eta:.0f}s   "
+                f"{findings} finding{'s' if findings != 1 else ''}   "
             )
             sys.stderr.write(line)
             sys.stderr.flush()
@@ -892,6 +934,40 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
                          "low": "\033[94m", "info": "\033[96m"}.get(severity, "")
             sc = "" if _no_color_out else sev_color
             print(f"    {sc}{severity.upper():<12}{_R} {count}")
+
+    # Cross-scan state summary (Burp Enterprise New/Repeated/Regressed/Resolved model)
+    if result.scan_states:
+        state_counts: dict[str, int] = {}
+        for s in result.scan_states.values():
+            state_counts[s] = state_counts.get(s, 0) + 1
+        _SC = {
+            "new":       "\033[96m",   # cyan
+            "repeated":  "\033[93m",   # yellow
+            "regressed": "\033[91m",   # red
+        }
+        parts = []
+        for state in ("new", "regressed", "repeated"):
+            cnt = state_counts.get(state, 0)
+            if cnt:
+                sc = "" if _no_color_out else _SC.get(state, "")
+                parts.append(f"{sc}{state.upper()} {cnt}{_R}")
+        if parts:
+            print(f"[+] Finding states: {' | '.join(parts)}")
+    if result.resolved_findings:
+        _gc = "" if _no_color_out else "\033[92m"
+        print(f"[+] {_gc}Resolved since last scan:{_R} {len(result.resolved_findings)} finding(s) fixed")
+        for title, url, param in result.resolved_findings[:5]:
+            p = f"  param={param}" if param else ""
+            print(f"    ✓ {title} — {url}{p}")
+        if len(result.resolved_findings) > 5:
+            print(f"    … and {len(result.resolved_findings) - 5} more")
+
+    # "Fix These First" prioritization (Bright Security two-lens scoring)
+    if result.findings:
+        from scanner.core.prioritizer import prioritize, format_fix_first
+        top = prioritize(result.findings, result.scan_states, top_n=10)
+        if top:
+            print(format_fix_first(top, result.scan_states, no_color=_no_color_out))
 
     if result.compliance_reports:
         print()
@@ -1382,6 +1458,84 @@ def _run_config(args) -> None:
     _policy.print_policy(pol)
 
 
+def _run_schedule(args) -> None:
+    """Manage scheduled recurring scans (Burp Enterprise / Bright Security model)."""
+    from scanner.core.scheduler import (
+        add_schedule, remove_schedule, load_schedules, get_due_schedules,
+        mark_ran, next_run,
+    )
+    action = getattr(args, "schedule_action", None)
+
+    if action == "add":
+        modules = [m.strip() for m in (args.modules or "").split(",") if m.strip()]
+        entry = add_schedule(
+            target=args.target,
+            interval=args.interval,
+            profile=getattr(args, "profile", None),
+            modules=modules or None,
+            max_pages=getattr(args, "max_pages", None),
+            level=getattr(args, "level", None),
+        )
+        print(f"[+] Schedule added: {entry['target']}  interval={entry['interval']}")
+        return
+
+    if action == "remove":
+        if remove_schedule(args.target):
+            print(f"[+] Schedule removed: {args.target}")
+        else:
+            print(f"[!] No schedule found for: {args.target}")
+        return
+
+    if action == "list":
+        schedules = load_schedules()
+        if not schedules:
+            print("[*] No schedules configured. Use: kagesec schedule add <target> --interval daily")
+            return
+        print(f"{'Target':<45} {'Interval':<12} {'Last Run':<22} {'Next Run'}")
+        print("-" * 110)
+        for s in schedules:
+            lr = (s.get("last_run") or "never")[:19]
+            nr_dt = next_run(s)
+            nr = nr_dt.strftime("%Y-%m-%d %H:%M UTC") if nr_dt else "—"
+            print(f"{s['target']:<45} {s['interval']:<12} {lr:<22} {nr}")
+        return
+
+    if action == "run":
+        due = get_due_schedules()
+        if not due:
+            print("[*] No scheduled scans are due.")
+            return
+        print(f"[*] Running {len(due)} due scan(s)…")
+        from scanner.core.engine import run_scan
+        from scanner.core.config import ScanConfig
+        for s in due:
+            target = s["target"]
+            opts   = s.get("options", {})
+            print(f"\n[>] Scanning: {target}  (interval={s['interval']})")
+            try:
+                cfg = ScanConfig(
+                    target=target,
+                    max_pages=opts.get("max_pages", 100),
+                    level=opts.get("level", 1),
+                    modules=opts.get("modules") or None,
+                )
+                result, _ = run_scan(config=cfg)
+                summary = result.summary()
+                print(f"[+] Done: {summary['total_findings']} findings  "
+                      f"pages={summary['pages_crawled']}")
+                mark_ran(target)
+            except Exception as e:
+                print(f"[!] Scan failed for {target}: {e}")
+        return
+
+    # No subcommand — print help
+    print("Usage: kagesec schedule <add|list|remove|run>")
+    print("  add <target> --interval daily|weekly|hourly|monthly|'cron expr'")
+    print("  list")
+    print("  remove <target>")
+    print("  run   (run all due schedules; add to system crontab for automation)")
+
+
 def _run_suppress(args) -> None:
     from scanner.core.suppressions import (
         add_suppression, remove_suppression, load_suppressions
@@ -1426,6 +1580,78 @@ def _run_suppress(args) -> None:
         else:
             print(f"[!] Rule {args.rule_id} not found.")
         return
+
+
+def _try_poc_curl_verification(poc_curl: str, finding: dict, client) -> "bool | None":
+    """Parse a poc_curl command and replay it via httpx.  # noqa: E501
+
+    Returns:
+        True  — response contains evidence keywords → finding still present
+        False — no evidence keywords found → likely resolved
+        None  — cannot determine (parse error, network error)
+
+    Based on ZAP Retest add-on: replay detection logic → report Present/Absent.
+    """
+    import shlex
+    try:
+        parts = shlex.split(poc_curl)
+    except ValueError:
+        return None
+
+    method = "GET"
+    url = ""
+    headers: dict[str, str] = {}
+    data: str | None = None
+
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p in ("-X", "--request") and i + 1 < len(parts):
+            method = parts[i + 1].upper()
+            i += 2
+        elif p in ("-H", "--header") and i + 1 < len(parts):
+            h = parts[i + 1]
+            if ":" in h:
+                k, v = h.split(":", 1)
+                headers[k.strip()] = v.strip()
+            i += 2
+        elif p in ("-d", "--data") and i + 1 < len(parts):
+            data = parts[i + 1]
+            i += 2
+        elif not p.startswith("-") and ("://" in p or p.startswith("'")):
+            url = p.strip("'\"")
+            i += 1
+        else:
+            i += 1
+
+    if not url:
+        return None
+
+    try:
+        if method == "GET":
+            resp = client.get(url, headers=headers, timeout=10)
+        else:
+            resp = client.request(method, url, headers=headers, content=data, timeout=10)
+    except Exception:
+        return None
+
+    # Check response against evidence keywords from the original finding
+    evidence = (finding.get("evidence") or "").lower()
+    title    = (finding.get("title")    or "").lower()
+    body     = resp.text.lower()
+
+    # Extract a few meaningful keywords from evidence (skip generic words)
+    import re as _re
+    _skip = {"the", "was", "for", "and", "to", "in", "of", "a", "is", "at", "with"}
+    keywords = [w for w in _re.split(r"\W+", evidence)[:20] if len(w) > 4 and w not in _skip]
+    if not keywords:
+        keywords = [w for w in _re.split(r"\W+", title)[:10] if len(w) > 4 and w not in _skip]
+
+    if keywords and any(kw in body for kw in keywords):
+        return True   # evidence still present
+    if resp.status_code >= 400:
+        return False  # endpoint returning error — likely resolved or requires auth
+    return None       # inconclusive
 
 
 def _run_retest(args) -> None:
@@ -1533,6 +1759,21 @@ def _run_retest(args) -> None:
     config.api_key = api_key if not getattr(args, "no_ai", False) else None
 
     with httpx.Client(follow_redirects=True, timeout=15, verify=False) as client:  # nosec B501
+        # Fast path (ZAP Retest approach): if poc_curl is available, replay the exact
+        # HTTP request first. This takes < 2s vs. re-running the full module.
+        poc_curl = target_finding.get("poc_curl", "")
+        if poc_curl:
+            fast_result = _try_poc_curl_verification(poc_curl, target_finding, client)
+            if fast_result is not None:
+                if fast_result:
+                    print("[!] STILL PRESENT — vulnerability confirmed via request replay.")
+                    print(f"    poc_curl: {poc_curl}")
+                else:
+                    print("[+] RESOLVED — finding not reproducible via request replay.")
+                    print("    Recommend a full rescan to confirm the fix holds.")
+                sys.exit(1 if fast_result else 0)
+            print("[~] poc_curl replay inconclusive — falling back to module re-run.")
+
         try:
             resp = client.get(url, timeout=10)
             from bs4 import BeautifulSoup
@@ -1570,9 +1811,29 @@ def _run_retest(args) -> None:
                     print(f"[!] Module error: {e2}")
                     new_findings = []
         else:
-            print("[~] Could not map finding to a specific module — running all active modules")
+            # Narrowed fallback: map by owasp_category / cwe instead of running all 61 modules
+            _OWASP_MODULE_MAP = {
+                "A01": ["auth_bypass", "session_fixation", "jwt_attacks"],
+                "A02": ["cookie_security", "tls", "session_entropy"],
+                "A03": ["sqli", "xss", "cmd_injection", "ssti", "xxe", "crlf"],
+                "A04": ["business_logic", "path_traversal", "file_upload"],
+                "A05": ["security_headers", "cors", "debug_mode", "version_disclosure"],
+                "A06": ["version_disclosure", "cve_check"],
+                "A07": ["auth_bypass", "username_enumeration"],
+                "A08": ["deserialization"],
+                "A09": ["log4j_deep"],
+                "A10": ["ssrf", "request_smuggling"],
+            }
+            _owasp = (target_finding.get("owasp_category") or "")[:3]
+            _candidate_names = _OWASP_MODULE_MAP.get(_owasp, [])
+            _candidate_modules = [m for m in ALL_MODULES if m.__name__.split(".")[-1] in _candidate_names]
+            if not _candidate_modules:
+                _candidate_modules = ALL_MODULES   # last resort: all modules
+                print("[~] Could not narrow modules from OWASP category — running all")
+            else:
+                print(f"[~] Running {len(_candidate_modules)} module(s) based on OWASP category {_owasp!r}")
             new_findings = []
-            for mod in ALL_MODULES:
+            for mod in _candidate_modules:
                 try:
                     res = mod.test(page, client, config)
                     new_findings.extend(res or [])

@@ -1,8 +1,8 @@
 # KageSec
 
-**A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and — if you give it a Claude API key — uses AI to verify whether the findings are real or just vibes.
+**A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and uses AI to verify whether the findings are real — so your report isn't 200 false positives that someone has to triage at 11pm.
 
-Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then the baby got really into AI.
+Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then got really into AI and AppSec workflows.
 
 ## vs Nuclei CLI — Real Benchmark
 
@@ -10,11 +10,12 @@ Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's inten
 
 | | KageSec (no AI, no browser) | Nuclei CLI |
 |---|---|---|
-| **Total scan time** | **34m 47s** | **5m 22s** |
+| **Total scan time** | **29m 36s** | **5m 22s** |
 | Pages / URLs scanned | 31 pages crawled | 1 URL |
 | Templates run | 7,417 HTTP templates | 9,028 templates |
 | Template findings | 24 | 25 |
-| **Total findings** | **63** | **25** |
+| **Total findings** | **50** | **25** |
+| **False positives** | **0** | unknown |
 | OS Command Injection | ✅ CRITICAL | ❌ |
 | Server-Side Template Injection | ✅ CRITICAL | ❌ |
 | Client-Side Template Injection | ✅ CRITICAL | ❌ |
@@ -29,13 +30,13 @@ Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's inten
 | Subdomain discovery | ✅ | ❌ |
 | Nuclei's 25 findings | ✅ (24 matched) | ✅ |
 
-**KageSec takes longer because it does more.** The 34 minutes is almost entirely page crawling and per-page exploitation across 31 pages — the template engine itself completes in ~2 minutes concurrently. Nuclei fires templates at one URL and stops; it cannot find SSTI, DOM XSS, IDOR, or business logic flaws because it never crawls the application.
+**KageSec takes longer because it does more.** Nuclei fires templates at one URL and stops. KageSec crawls 31 pages, runs exploitation modules per page, and runs the template engine concurrently — the template engine itself finishes in ~2 minutes. The extra time is spent finding the vulnerabilities Nuclei structurally cannot find: SSTI, DOM XSS, IDOR, business logic, CSRF.
 
-The template match rate is comparable (24 vs 25). The 38 additional findings are vulnerabilities that only exist if you actually test the application.
+The 50 findings are all real. Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
-![Version](https://img.shields.io/badge/version-0.2.2--beta-orange)
+![Version](https://img.shields.io/badge/version-0.2.3--beta-orange)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
@@ -52,9 +53,7 @@ I sat with that for a moment.
 
 I know Nuclei exists. It's great. It's the industry open-source standard and ProjectDiscovery has built something genuinely impressive. But the companies built on top of it will happily charge you enterprise pricing for what is, at its core, a YAML template runner with a nice UI.
 
-So I built KageSec instead — open-source, AI-powered, and free. It runs the same categories of checks, uses Nuclei-compatible templates, and adds Claude AI on top to verify whether findings are actually exploitable (so you're not manually triaging 200 false positives at 11pm).
-
-Then I took it further. KageSec ships a purpose-built Go template engine (`kagesec-engine`) that runs 7,400+ HTTP templates concurrently with 50 goroutines, streams findings in real-time, and scores each result with a confidence value (0.0–1.0) instead of Nuclei's binary match/no-match. It fingerprints your target stack and runs the most relevant templates first — so even a partial scan surfaces the highest-value findings. In testing: 7,417 templates against a live target in 73 seconds.
+So I built KageSec instead — open-source, AI-powered, and free. It runs the same categories of checks, uses Nuclei-compatible templates, and adds AI on top to verify whether findings are actually exploitable.
 
 Zero subscription fees. Zero per-seat pricing. Zero "contact us for enterprise". Just clone it and run it.
 
@@ -76,7 +75,7 @@ KageSec ships `kagesec-engine` — a purpose-built Go binary that handles the te
 | Template coverage | 9,028 (incl. flow/js/code) | 7,417 HTTP templates — flow/javascript/code templates not yet supported |
 | AI filtering | None | With API key, Claude narrows 7,400+ templates to 80-200 relevant ones |
 
-In benchmark testing against a live target: **7,417 HTTP templates in ~2 minutes** with 50 goroutines, running concurrently alongside the page scan. Nuclei ran 9,028 templates in 5m 22s as a standalone scan — both matched ~25 findings from the same template set. KageSec's total scan time is higher because it crawls and exploits the full application; the template engine itself is the same speed class as Nuclei.
+In benchmark testing: **7,417 HTTP templates in ~2 minutes** with 50 goroutines. Nuclei ran 9,028 templates in 5m 22s as a standalone scan — both matched ~25 findings from the same template set.
 
 ### Building the engine
 
@@ -89,13 +88,6 @@ If you cloned the repo or want to rebuild:
 cd engine
 go build -o kagesec-engine .
 ```
-
-The Python scanner looks for the binary in this order:
-1. `scanner/_bin/kagesec-engine` — bundled (pip install)
-2. `engine/kagesec-engine` — dev / cloned repo
-3. Anywhere in `PATH`
-
-If none are found, it falls back to the Python template runner automatically.
 
 ### Cross-compiling for CI / Docker
 
@@ -111,7 +103,7 @@ GOOS=windows GOARCH=amd64 go build -o kagesec-engine-windows-amd64.exe .
 
 ## Claude Code Users
 
-If you use Claude Code to build and deploy your apps, KageSec plugs in directly. Two ways to use it:
+If you use Claude Code to build and deploy your apps, KageSec plugs in directly.
 
 **Option 1 — Ask Claude to scan during a conversation:**
 
@@ -123,25 +115,26 @@ Claude will call `kagesec_scan()` as a tool and report findings back in the conv
 
 **Option 2 — Automatic scan on every deployment:**
 
-The `.claude/` folder in this repo includes a hook that fires after any deployment Bash command (Vercel, Netlify, Heroku, Railway, Fly.io, AWS, etc.). Claude detects the live URL from the deployment output and starts a background scan automatically. No extra steps.
-
-Check `reports/` when it's done.
+The `.claude/` folder includes a hook that fires after any deployment Bash command (Vercel, Netlify, Heroku, Railway, Fly.io, AWS, etc.). Claude detects the live URL from the deployment output and starts a background scan automatically. Check `reports/` when it's done.
 
 ---
 
 ## What it does
 
-- **61 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, we've got a module for it.
-- **Go template engine** — `kagesec-engine` runs 7,417 HTTP-compatible Nuclei templates with 50 goroutines, real-time streaming, confidence scoring, and stack-aware template ordering. Benchmarked at ~2 minutes for 7,417 templates — comparable match rate to Nuclei CLI (24 vs 25 on the same target), zero false positives from unconfirmed OOB callbacks.
-- **50 built-in CVE templates** — Log4Shell, ProxyShell, Spring4Shell, MOVEit, Citrix Bleed, and the rest of the greatest hits. 10,000+ community templates available via `kagesec update-templates`.
-- **AI verification** — Claude API checks whether findings are actually exploitable, so your report doesn't look like it was written by a panicking intern
-- **Headless browser crawling** — Playwright handles SPAs and JS-heavy apps. Enabled by default because it's 2025 and everything is a React app
-- **Full auth support** — Bearer tokens, cookies, OAuth2, multi-step logins, TOTP 2FA. If your app has a login page, we can get in
-- **API scanning** — OpenAPI, GraphQL, gRPC, SOAP/WSDL, HAR import. REST or not, we're scanning it
-- **5 report formats** — JSON, PDF, SARIF, Burp XML, ZAP JSON — all saved to the `reports/` folder so your project root stays clean
-- **Compliance mapping** — ISO 27001, HIPAA, GDPR, APPI. For when your boss asks "are we compliant?" and you need a real answer
-- **CI/CD native** — GitHub Actions, `--fail-on high`, SARIF upload. Break the build before the attacker breaks your users
-- **Claude Code integration** — Runs automatically when you deploy via Claude Code. Your AI coding assistant now has a paranoid security sidekick
+- **61 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, there's a module for it.
+- **Go template engine** — `kagesec-engine` runs 7,417 HTTP-compatible Nuclei templates with 50 goroutines, real-time streaming, and confidence scoring. ~2 minutes for 7,417 templates. With an AI key, Claude narrows templates to 80-200 relevant ones for your stack.
+- **5 AI providers** — Anthropic Claude, OpenAI GPT-4o, Google Gemini, Mistral, and Ollama (local, no key required). AI verifies exploitability, classifies findings, and writes a human-readable report. Auto-detected from environment variables — no config needed.
+- **Zero false positives in parameter discovery** — canary-based comparison baseline matches the approach used by Burp Param Miner and Arjun. Two-tier wordlist (security-critical vs medium-confidence) with per-param attempt tracking.
+- **Finding state tracking** — every scan compares against the previous scan. Findings are classified as `NEW`, `REPEATED`, `REGRESSED` (was fixed, broke again), or `RESOLVED` (fixed since last scan). Modelled on Burp Enterprise's issue tracking.
+- **"Fix These First" prioritization** — after each scan, findings are scored by CVSS + AI exploitability verdict + finding state + severity tier and ranked. No more "here are 50 findings, good luck." Modelled on Bright Security's two-lens approach.
+- **Scheduled scanning** — `kagesec schedule add <target> --interval daily` — saves to `~/.kagesec/schedules.yaml`, runs via `kagesec schedule run` from crontab or CI.
+- **Session expiry detection** — `--login-logged-out REGEX` and `--login-logged-in REGEX` check every page response to detect expired sessions and re-authenticate mid-scan. Mirrors StackHawk's `loggedInIndicator`/`loggedOutIndicator` and ZAP's auth verification strategy.
+- **Headless browser crawling** — Playwright handles SPAs and JS-heavy apps. Enabled by default.
+- **Full auth support** — Bearer tokens, cookies, OAuth2, multi-step logins, TOTP 2FA, session expiry re-auth.
+- **API scanning** — OpenAPI, GraphQL, gRPC, SOAP/WSDL, HAR import.
+- **5 report formats** — JSON, PDF, SARIF, Burp XML, ZAP JSON — all saved to `reports/`.
+- **Compliance mapping** — ISO 27001, HIPAA, GDPR, APPI.
+- **CI/CD native** — GitHub Actions, `--fail-on high`, SARIF upload. Break the build before the attacker breaks your users.
 
 ---
 
@@ -151,7 +144,7 @@ Check `reports/` when it's done.
 pip install kagesec
 ```
 
-The `kagesec-engine` Go binary is bundled in the wheel — no manual build step required. After install, `kagesec scan` automatically uses it.
+The `kagesec-engine` Go binary is bundled in the wheel — no manual build step required.
 
 Want the full experience?
 
@@ -162,7 +155,7 @@ pip install "kagesec[dns]"                  # DNSSEC + subdomain enumeration
 pip install "kagesec[browser,pdf,dns]"      # The whole thing
 ```
 
-After installing `browser` or `pdf`, grab Chromium:
+After installing `browser`, grab Chromium:
 
 ```bash
 playwright install chromium
@@ -176,11 +169,11 @@ playwright install chromium
 # Basic scan — finds stuff, saves reports to reports/
 kagesec scan https://target.example.com
 
-# With AI verification (actually useful, highly recommended)
+# With AI verification (highly recommended — cuts false positives, scores exploitability)
 ANTHROPIC_API_KEY=sk-ant-... kagesec scan https://target.example.com --output all
 
-# Scan a React/Vue/Next.js SPA properly (browser is on by default)
-kagesec scan https://target.example.com
+# Zero-cost AI with Ollama (local model, no API key)
+kagesec scan https://target.example.com --output all
 
 # Disable browser for a faster, lighter scan
 kagesec scan https://target.example.com --no-browser
@@ -199,13 +192,47 @@ kagesec scan https://target.example.com --profile stealth --rate-limit 2
 
 # Through Burp for manual review alongside
 kagesec scan https://target.example.com --proxy http://127.0.0.1:8080
+
+# Prevent Mac from sleeping during long scans
+caffeinate -i kagesec scan https://target.example.com --nuclei-templates --stats
 ```
+
+---
+
+## AI Providers
+
+KageSec supports 5 AI providers. It auto-detects whichever one you have configured — no flags needed.
+
+```bash
+# Anthropic Claude (recommended — best verification quality)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI GPT-4o
+export OPENAI_API_KEY=sk-...
+
+# Google Gemini
+export GEMINI_API_KEY=...
+
+# Mistral
+export MISTRAL_API_KEY=...
+
+# Ollama — local model, zero cost, no key needed
+# Just make sure Ollama is running: https://ollama.com
+export OLLAMA_URL=http://localhost:11434   # optional, this is the default
+
+# Override provider and model explicitly
+kagesec scan https://target.example.com --ai-provider gemini --ai-model gemini-1.5-pro
+```
+
+Priority: Anthropic → OpenAI → Gemini → Mistral → Ollama. If none are available, the scan runs without AI and still produces full findings — you just won't get the verification layer or narrative report.
+
+AI verification batches findings in groups of 10, classifies each as `true_positive`, `false_positive`, or `needs_manual_review`, and scores exploitability and business impact.
 
 ---
 
 ## Authentication
 
-KageSec can log into your app before scanning. Yes, even the annoying ones with 2FA.
+KageSec can log into your app before scanning — including detecting when the session expires mid-scan and re-authenticating automatically.
 
 ```bash
 # Bearer token
@@ -230,13 +257,114 @@ kagesec scan https://app.example.com \
   --login-password secret \
   --login-success "/dashboard"
 
-# 2FA with TOTP — yes really
+# 2FA with TOTP
 kagesec scan https://app.example.com \
   --login-url https://app.example.com/login \
   --login-username admin@example.com \
   --login-password secret \
   --login-totp-secret JBSWY3DPEHPK3PXP
+
+# Session expiry detection — re-authenticates mid-scan if the session drops
+# (mirrors StackHawk loggedInIndicator/loggedOutIndicator + ZAP auth verification)
+kagesec scan https://app.example.com \
+  --login-url https://app.example.com/login \
+  --login-username admin@example.com \
+  --login-password secret \
+  --login-success "/dashboard" \
+  --login-logged-out "Sign in to your account|Session expired" \
+  --login-logged-in "My Account|Welcome back" \
+  --login-session-check https://app.example.com/account
 ```
+
+**`--login-logged-out REGEX`** — regex matched against every page response body. If it fires (e.g. login form reappeared), the scanner re-authenticates before continuing.
+
+**`--login-logged-in REGEX`** — regex that must be present in the response body to confirm a valid session. If absent, re-authenticate.
+
+**`--login-session-check URL`** — a known-authenticated URL polled every 50 module runs to check session validity. If omitted, every crawled page is checked instead.
+
+---
+
+## Finding States & Prioritization
+
+Every scan compares its findings against the previous scan for the same target. Findings appear in the output with state badges:
+
+```
+[+] Finding states: NEW 3 | REPEATED 18 | REGRESSED 1
+[+] Resolved since last scan: 5 finding(s) fixed
+    ✓ Missing CSP Header — https://example.com
+    ✓ Clickjacking — https://example.com
+    ...
+```
+
+| State | Meaning |
+|---|---|
+| `NEW` | First time this finding appeared on this target |
+| `REPEATED` | Present in both the previous scan and this one — still not fixed |
+| `REGRESSED` | Was resolved in a previous scan, now reappeared — needs urgent attention |
+| `RESOLVED` | Was present before, no longer detected — fix confirmed |
+
+After every scan, KageSec outputs a **Fix These First** section — findings ranked by priority score (CVSS + AI exploitability verdict + state bonus):
+
+```
+── FIX THESE FIRST ───────────────────────────────────────────
+   1. [score 16.3] CRITICAL [NEW]       OS Command Injection
+                   https://target.com/catalog  param=searchTerm
+   2. [score 15.3] CRITICAL [REPEATED]  Client-Side Template Injection
+                   https://target.com/catalog  param=searchTerm
+   3. [score 14.3] HIGH     [REGRESSED] XSS — was fixed, broke again
+                   https://target.com/search  param=q
+   ...top 10 only...
+────────────────────────────────────────────────────────────
+```
+
+Scoring: CVSS base (0–10) + AI true_positive (+3) + OOB verified (+2) + severity tier + REGRESSED bonus (+2.5).
+
+---
+
+## Scheduled Scanning
+
+```bash
+# Add a nightly scan
+kagesec schedule add https://app.example.com --interval daily --level 3 --max-pages 150
+
+# Weekly scan with a specific profile
+kagesec schedule add https://app.example.com --interval weekly --profile full
+
+# Cron expression
+kagesec schedule add https://app.example.com --interval "0 2 * * *"
+
+# List all schedules with next-run times
+kagesec schedule list
+
+# Remove a schedule
+kagesec schedule remove https://app.example.com
+
+# Run all due schedules (call this from system crontab or a nightly CI step)
+kagesec schedule run
+```
+
+Schedules are stored in `~/.kagesec/schedules.yaml`. No daemon required — add `kagesec schedule run` to your crontab:
+
+```bash
+0 2 * * * kagesec schedule run
+```
+
+---
+
+## Retesting Findings
+
+After a fix is deployed, verify it without running the full scan:
+
+```bash
+# By index (0-based)
+kagesec retest 0 --report reports/kagesec_report.json
+
+# By title substring
+kagesec retest "OS Command" --report reports/kagesec_report.json
+kagesec retest "XSS" --report reports/kagesec_report.json
+```
+
+The retest first tries to replay the exact HTTP request from the `poc_curl` field (< 2s). If that's inconclusive, it re-runs the relevant detection module. Reports `STILL PRESENT` or `RESOLVED`.
 
 ---
 
@@ -252,10 +380,10 @@ kagesec scan https://api.example.com --graphql https://api.example.com/graphql
 # gRPC
 kagesec scan grpc://api.example.com:50051 --grpc api.example.com:50051
 
-# SOAP / WSDL (yes, some companies still use SOAP)
+# SOAP / WSDL
 kagesec scan https://api.example.com --wsdl https://api.example.com/service?wsdl
 
-# Import a HAR file (great for scanning authenticated flows you recorded in Chrome DevTools)
+# Import a HAR file (great for scanning authenticated flows recorded in Chrome DevTools)
 kagesec scan https://app.example.com --har ./session.har
 ```
 
@@ -263,9 +391,7 @@ kagesec scan https://app.example.com --har ./session.har
 
 ## Claude Code Integration
 
-KageSec can act as a tool inside Claude Code. When Claude deploys your app, KageSec can automatically scan it.
-
-### Option 1 — MCP Server (Claude calls it as a tool)
+### Option 1 — MCP Server
 
 Add to your project's `.mcp.json`:
 
@@ -281,13 +407,11 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Now Claude can call `kagesec_scan("https://your-app.com")` directly inside a conversation. Tell Claude: _"after you deploy, run a security scan"_ — and it will.
+Now Claude can call `kagesec_scan("https://your-app.com")` directly inside a conversation.
 
-### Option 2 — PostToolUse Hook (auto-triggers on deployment)
+### Option 2 — PostToolUse Hook
 
-The `.claude/settings.json` and `.claude/hooks/post_deploy_scan.py` files are already included in this repo. When Claude runs a deployment command (Vercel, Netlify, Heroku, Railway, Fly.io, AWS, etc.), the hook extracts the live URL from the output and kicks off a background scan automatically.
-
-You don't have to do anything. Deploy → scan happens. Check `reports/` when it's done.
+The `.claude/settings.json` and `.claude/hooks/post_deploy_scan.py` files are already included. When Claude runs a deployment command, the hook extracts the live URL and kicks off a background scan automatically.
 
 ---
 
@@ -344,7 +468,7 @@ You don't have to do anything. Deploy → scan happens. Check `reports/` when it
 | `prototype_pollution`  | JavaScript prototype pollution                                |
 | `padding_oracle`       | CBC decryption via padding oracle                             |
 | `http_param_pollution` | Backend parser confusion (IIS, Apache, Tomcat)                |
-| `business_logic`       | Price manipulation, discount bypass, logical flaws            |
+| `business_logic`       | Price manipulation, boundary value bypass — flags on explicit success indicators only (OWASP WSTG approach) |
 | `race_condition`       | Concurrent request race detection                             |
 | `multistep_injection`  | Multi-step wizard injection, sequential payload chains        |
 | `form_fuzz`            | Form field fuzzing + input validation                         |
@@ -373,24 +497,24 @@ You don't have to do anything. Deploy → scan happens. Check `reports/` when it
 | Module               | Covers                                                                                                      |
 | -------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `path_discovery`     | Wordlist-based directory and file fuzzing                                                                   |
-| `param_discovery`    | Common GET/POST parameter detection                                                                         |
+| `param_discovery`    | Hidden parameter detection — two-tier wordlist, canary-based FP prevention (Burp Param Miner approach)     |
 | `exposed_files`      | Backup and archive file discovery (`.bak`, `.zip`, `.sql`)                                                  |
 | `robots_probe`       | robots.txt path enumeration                                                                                 |
 | `vhost_enum`         | DNS-based virtual host enumeration                                                                          |
 | `subdomain_takeover` | CNAME/NS resolution check for unclaimed domains                                                             |
 | `version_disclosure` | Server header, X-Powered-By, framework banners                                                              |
-| `api_key_leak`       | API key exposure in response headers and bodies (context-aware, low false positives)                        |
+| `api_key_leak`       | API key exposure in response headers and bodies                                                             |
 | `breach`             | HaveIBeenPwned credential exposure check                                                                    |
 | `waf_detect`         | WAF/IPS fingerprinting (ModSecurity, F5, Cloudflare, etc.)                                                  |
 | `waf_bypass`         | Encoding/obfuscation — URL, Unicode, case mutation, comment injection                                       |
 | `coverage_check`     | Crawl coverage metrics (pages, params, methods)                                                             |
 | `debug_mode`         | Debug mode enabled, stack trace disclosure, verbose error pages                                             |
 | `cve_check`          | CVE fingerprinting from response signatures                                                                 |
-| `ai_cve`             | Claude API: dynamic CVE research + targeted template generation                                             |
+| `ai_cve`             | AI-powered dynamic CVE research + targeted template generation                                              |
 | `dnssec`             | DNSSEC, SPF, DMARC validation                                                                               |
 | `rate_limit`         | Insufficient rate limiting / missing brute-force protection                                                 |
 | `captcha_check`      | Weak CAPTCHA (client-side validation, predictable seeds)                                                    |
-| `templates`          | Nuclei-compatible YAML template runner (59 built-in; use `--nuclei-templates` for 7,400+ community HTTP templates) |
+| `templates`          | Nuclei-compatible YAML template runner (59 built-in; `--nuclei-templates` for 7,400+ community HTTP templates) |
 
 ---
 
@@ -398,26 +522,20 @@ You don't have to do anything. Deploy → scan happens. Check `reports/` when it
 
 50 built-in Nuclei-compatible YAML templates covering the CVEs that actually matter:
 
-- **Log4Shell** — CVE-2021-44228, CVE-2021-45046 (the one that ruined December 2021 for everyone)
+- **Log4Shell** — CVE-2021-44228, CVE-2021-45046
 - **ProxyShell** — CVE-2021-34473
 - **Spring4Shell** — CVE-2022-22965
-- **Follina** — CVE-2022-30190
-- **Text4Shell** — CVE-2022-42889
 - **MOVEit RCE** — CVE-2023-34362
 - **Citrix Bleed** — CVE-2023-4966
 - **ConnectWise ScreenConnect** — CVE-2024-1709
 - **Confluence RCE** — CVE-2023-22515
-- **Exchange ProxyNotShell** — CVE-2022-41082
-- **F5 BIG-IP** — CVE-2022-1388
-- Plus Apache, VMware vCenter, GitLab, Cisco, Fortinet, Minio, TeamCity, Jenkins, and more
+- Plus Apache, VMware vCenter, GitLab, Cisco, Fortinet, F5 BIG-IP, Minio, TeamCity, Jenkins
 
 **Extra template categories:**
 
 - **Exposed panels** (7): Grafana, Jenkins, Kibana, Laravel Telescope, phpMyAdmin, Prometheus, Spring Boot Actuator
 - **Misconfigurations** (7): `.env` exposure, `.git` exposure, GraphQL introspection open, Swagger/OpenAPI public, `phpinfo.php`, Apache server-status, backup files
 - **AI-generated**: Claude generates targeted templates per detected stack and caches them for 30 days
-
-Want the full Nuclei community templates?
 
 ```bash
 kagesec update-templates
@@ -426,10 +544,6 @@ kagesec update-templates
 kagesec scan https://target.example.com --nuclei-templates
 ```
 
-The Go engine runs all HTTP-compatible templates concurrently with no timeout. With an AI key, Claude also pre-selects the 80-200 most relevant templates for your stack — so you get targeted coverage faster with higher signal.
-
-> **Note:** `kagesec update-templates` downloads ~10,900 YAML files. The Go engine loads the ~7,400 that use HTTP requests — templates using `flow:`, `javascript:`, `code:`, or `headless:` blocks are skipped. OOB-based templates are also skipped to avoid unconfirmed false positives. In benchmark testing, KageSec matched 24 findings vs Nuclei CLI's 25 on the same target and template set.
-
 ---
 
 ## Reports
@@ -437,26 +551,12 @@ The Go engine runs all HTTP-compatible templates concurrently with no timeout. W
 All reports are saved to the `reports/` folder automatically.
 
 ```bash
-# JSON (default — machine-readable, everything)
-kagesec scan https://target.example.com
-
-# PDF (nice-looking, shareable with stakeholders who don't read JSON)
-kagesec scan https://target.example.com --output pdf
-
-# All formats at once
-kagesec scan https://target.example.com --output all
-
-# SARIF (GitHub Code Scanning)
-kagesec scan https://target.example.com --output sarif
-
-# Burp Suite XML
-kagesec scan https://target.example.com --output burp
-
-# OWASP ZAP JSON
-kagesec scan https://target.example.com --output zap
-
-# Markdown (human-readable narrative — requires AI key)
-ANTHROPIC_API_KEY=sk-ant-... kagesec scan https://target.example.com --output markdown
+kagesec scan https://target.example.com --output json      # default
+kagesec scan https://target.example.com --output pdf       # stakeholder-ready
+kagesec scan https://target.example.com --output all       # every format at once
+kagesec scan https://target.example.com --output sarif     # GitHub Code Scanning
+kagesec scan https://target.example.com --output burp      # Burp Suite XML
+kagesec scan https://target.example.com --output zap       # OWASP ZAP JSON
 
 # Push findings to Jira
 kagesec issues --format jira \
@@ -479,8 +579,6 @@ kagesec issues --format github \
 kagesec scan https://target.example.com --compliance iso27001 gdpr hipaa appi
 ```
 
-Findings map to a subset of controls in each standard — specifically the ones a DAST tool can actually test (encryption, authentication, injection, session management, TLS, data exposure). Controls that require a human auditor — physical security, HR policy, vendor contracts, incident response procedures — are flagged as "manual review required."
-
 | Standard | Total Controls | DAST-Testable | KageSec Covers |
 |----------|---------------|---------------|----------------|
 | ISO 27001:2022 | 93 | ~20–25 | 20 (19 auto + 1 manual) |
@@ -488,15 +586,11 @@ Findings map to a subset of controls in each standard — specifically the ones 
 | GDPR | 99 articles | ~10 | 10 (6 auto + 4 manual) |
 | APPI | 87+ articles | ~10 | 12 (6 auto + 6 manual) |
 
-This is not a substitute for a full compliance audit or a real auditor. It gives you evidence for the technical controls and flags the gaps — which is useful for audit prep, not for printing a certificate. No DAST tool covers all controls. Neither does Nuclei, ZAP, or anything else that only sees HTTP traffic.
-
 ---
 
 ## CI/CD
 
 ### GitHub Actions
-
-Create `.github/workflows/security-scan.yml` in **your own repo**:
 
 ```yaml
 name: Security Scan
@@ -525,19 +619,19 @@ jobs:
           sarif_file: reports/kagesec_report.sarif
 ```
 
-Full examples (GitHub Actions + GitLab CI) are in the [`ci/`](ci/) folder.
+Full examples in the [`ci/`](ci/) folder.
 
-### Break the build if something is actually bad
+### Break the build on real findings
 
 ```bash
 kagesec scan https://target.example.com --fail-on high
 ```
 
-Exit code `1` if findings at or above the specified severity are found; `0` if you're good.
+Exit code `1` if findings at or above the specified severity are found; `0` if clean.
 
 ### Delta Scanning
 
-KageSec remembers which pages it already scanned. Unchanged pages get skipped on repeat runs — so your CI scans get faster over time, not slower. Use `--full` to force a complete rescan.
+KageSec remembers which pages it already scanned. Unchanged pages get skipped on repeat runs — CI scans get faster over time. Use `--full` to force a complete rescan.
 
 ---
 
@@ -547,31 +641,36 @@ KageSec remembers which pages it already scanned. Unchanged pages get skipped on
 
 ```bash
 kagesec scan https://target.example.com --profile quick      # Fast, low noise — good for CI
-kagesec scan https://target.example.com --profile full       # Everything, max depth — go make coffee
+kagesec scan https://target.example.com --profile full       # Everything, max depth
 kagesec scan https://target.example.com --profile api        # API-focused
 kagesec scan https://target.example.com --profile passive    # Look, don't touch
 kagesec scan https://target.example.com --profile stealth    # Low and slow, random User-Agent
 ```
 
-### Workflows
-
-```bash
-kagesec workflows
-kagesec scan https://target.example.com --workflow quick-web
-kagesec scan https://wp.example.com --workflow wordpress
-```
-
 ### Resume Interrupted Scans
-
-Scan got killed halfway? Pick up where you left off:
 
 ```bash
 kagesec scan https://target.example.com --resume <scan-id>
 ```
 
-### Custom Plugins
+### Scan History & Trends
 
-Drop a Python file into `~/.kagesec/plugins/` and it runs alongside everything else:
+```bash
+kagesec history https://target.example.com             # Summary with state breakdown
+kagesec history https://target.example.com --scans     # All past scans
+kagesec history https://target.example.com --persisting # Findings seen in multiple scans
+```
+
+### Suppress False Positives
+
+```bash
+kagesec suppress add --title "User Name Information"   # Suppress OSINT noise
+kagesec suppress add --title "RDAP WHOIS"
+kagesec suppress list
+kagesec suppress remove <id>
+```
+
+### Custom Plugins
 
 ```python
 # ~/.kagesec/plugins/my_check.py
@@ -589,8 +688,6 @@ def test(page, client, **kwargs):
 
 ### Out-of-Band (Blind) Detection
 
-Blind SQLi, blind XSS, SSRF, XXE, and command injection are verified via OOB callbacks through `oast.pro` by default. This catches vulnerabilities that don't show up in the response.
-
 ```bash
 # Disable for air-gapped targets
 kagesec scan https://target.example.com --no-oob
@@ -607,7 +704,7 @@ kagesec scan https://target.example.com \
   --notify-min-severity high
 ```
 
-Supports Slack, Teams, Discord, and generic JSON webhooks. Useful for setting up "page me if it finds anything critical" pipelines.
+Supports Slack, Teams, Discord, and generic JSON webhooks.
 
 ---
 
@@ -618,40 +715,55 @@ Supports Slack, Teams, Discord, and generic JSON webhooks. Useful for setting up
 | Command                     | Description                                           |
 | --------------------------- | ----------------------------------------------------- |
 | `scan <target>`             | Scan a target URL                                     |
+| `schedule`                  | Manage recurring scheduled scans                      |
+| `retest <finding-id>`       | Re-run a single finding — fast path via poc_curl, falls back to module |
+| `history [<target>]`        | Show finding trends and state over time               |
+| `suppress`                  | Manage false-positive suppression rules               |
 | `diff <baseline> <current>` | Compare two reports, fail on new findings             |
+| `issues`                    | Export to Jira or GitHub Issues                       |
 | `serve`                     | Start HTTP API server (`0.0.0.0:8080`)                |
 | `export --scan-id ID`       | Bundle a checkpoint + report into a zip               |
 | `import-scan <file>`        | Import a previously exported scan                     |
-| `history [<target>]`        | Show finding trends over time                         |
-| `suppress`                  | Manage false-positive suppression rules               |
-| `retest <finding-id>`       | Re-run a single finding                               |
-| `issues`                    | Export to Jira or GitHub Issues                       |
 | `workflows`                 | List available scan workflows                         |
 | `config`                    | Manage persistent settings (`~/.kagesec/config.yaml`) |
 | `update-templates`          | Download Nuclei community templates                   |
 
 ### Key `scan` Flags
 
-| Flag                 | Default | Description                                                  |
-| -------------------- | ------- | ------------------------------------------------------------ |
-| `--depth N`          | 3       | Crawl depth                                                  |
-| `--max-pages N`      | 100     | Max pages to crawl                                           |
-| `--level 1-5`        | 1       | Scan aggressiveness                                          |
-| `--risk 1-3`         | 1       | Risk tolerance                                               |
-| `--browser`          | **on**  | Playwright headless crawling (use `--no-browser` to disable) |
-| `--passive`          | off     | No injection — headers and content only                      |
-| `--parallel N`       | 1       | Concurrent multi-target scanning                             |
-| `--live`             | off     | Print findings as they're discovered                         |
-| `--no-ai`            | off     | Skip Claude AI verification                                  |
-| `--fail-on LEVEL`    | —       | Exit 1 if findings at this severity or above                 |
-| `--output FORMAT`    | json    | Report format (json/pdf/sarif/burp/zap/all)                  |
-| `--modules M1 M2`    | all     | Run only specific modules                                    |
-| `--nuclei-templates` | off     | Include 10k+ Nuclei community templates                      |
-| `--profile NAME`     | —       | Apply a scan preset                                          |
-| `--workflow NAME`    | —       | Run a predefined workflow                                    |
-| `--resume ID`        | —       | Resume an interrupted scan                                   |
-| `--full`             | off     | Force full rescan (skip delta optimization)                  |
-| `--max-time MIN`     | 0       | Hard time limit in minutes                                   |
+| Flag                          | Default | Description                                                  |
+| ----------------------------- | ------- | ------------------------------------------------------------ |
+| `--depth N`                   | 3       | Crawl depth                                                  |
+| `--max-pages N`               | 100     | Max pages to crawl                                           |
+| `--level 1-5`                 | 1       | Scan aggressiveness                                          |
+| `--risk 1-3`                  | 1       | Risk tolerance (risk≥2 enables time-based SQLi)              |
+| `--browser`                   | **on**  | Playwright headless crawling (`--no-browser` to disable)     |
+| `--passive`                   | off     | No injection — headers and content only                      |
+| `--live`                      | off     | Print findings as discovered                                 |
+| `--stats`                     | off     | Progress bar on stderr                                       |
+| `--no-ai`                     | off     | Skip AI verification                                         |
+| `--ai-provider NAME`          | auto    | anthropic \| openai \| gemini \| mistral \| ollama           |
+| `--fail-on LEVEL`             | —       | Exit 1 if findings at this severity or above                 |
+| `--output FORMAT`             | json    | json / pdf / sarif / burp / zap / all                        |
+| `--modules M1 M2`             | all     | Run only specific modules                                    |
+| `--nuclei-templates`          | off     | Include 10k+ Nuclei community templates                      |
+| `--profile NAME`              | —       | Apply a scan preset                                          |
+| `--resume ID`                 | —       | Resume an interrupted scan                                   |
+| `--full`                      | off     | Force full rescan (skip delta optimization)                  |
+| `--max-time MIN`              | 0       | Hard time limit in minutes                                   |
+| `--login-logged-out REGEX`    | —       | Re-auth trigger: regex matching response when session expires |
+| `--login-logged-in REGEX`     | —       | Re-auth trigger: regex that must be present for valid session |
+| `--login-session-check URL`   | —       | URL polled every 50 checks to verify session validity        |
+| `--concurrency N`             | 8       | Module threads per page                                      |
+| `--rate-limit RPS`            | 10      | HTTP requests per second                                     |
+
+### `schedule` Subcommands
+
+```bash
+kagesec schedule add <target> --interval daily|weekly|hourly|monthly|"0 2 * * *"
+kagesec schedule list
+kagesec schedule remove <target>
+kagesec schedule run
+```
 
 ---
 
@@ -659,10 +771,14 @@ Supports Slack, Teams, Discord, and generic JSON webhooks. Useful for setting up
 
 | Variable            | Required        | Description                                                               |
 | ------------------- | --------------- | ------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | For AI features | Claude API key for exploit verification, CVE research, and report writing |
+| `ANTHROPIC_API_KEY` | For AI features | Claude API — verified exploitability, CVE research, narrative report      |
+| `OPENAI_API_KEY`    | Alternative AI  | GPT-4o as AI provider                                                     |
+| `GEMINI_API_KEY`    | Alternative AI  | Google Gemini as AI provider                                              |
+| `MISTRAL_API_KEY`   | Alternative AI  | Mistral Large as AI provider                                              |
+| `OLLAMA_URL`        | Optional        | Ollama base URL (default: `http://localhost:11434`) — free local AI       |
 | `NVD_API_KEY`       | Optional        | NVD API key for faster CVE enrichment                                     |
 
-No API key? No problem. KageSec runs all 61 modules and produces full reports without one. You just won't get the AI triage layer or the narrative Markdown report.
+No AI key? KageSec runs all 61 modules and produces full reports without one. You just won't get the AI triage layer or the narrative Markdown report.
 
 ---
 
@@ -672,9 +788,10 @@ No API key? No problem. KageSec runs all 61 modules and produces full reports wi
 - **Template engine:** Go 1.22+ (`kagesec-engine` — 50 goroutines, real-time JSON Lines output)
 - **HTTP client:** httpx (Python), `net/http` (Go engine)
 - **Browser:** Playwright (Chromium)
-- **AI:** Claude API (Anthropic) — `claude-sonnet-4-6` / `claude-opus-4-7`
+- **AI:** Claude, GPT-4o, Gemini, Mistral, or Ollama (auto-detected)
 - **Templates:** Nuclei-compatible YAML (`gopkg.in/yaml.v3`)
 - **Reports:** Jinja2, WeasyPrint (PDF), SARIF 2.1.0
+- **State store:** SQLite (`~/.kagesec/findings.db`) — finding history, trending, states
 
 ---
 
@@ -682,12 +799,12 @@ No API key? No problem. KageSec runs all 61 modules and produces full reports wi
 
 ```
 kagesec/
-├── cli/                    # CLI entrypoint (main.py, 12 subcommands)
+├── cli/                    # CLI entrypoint (main.py, 13 subcommands)
 ├── scanner/
-│   ├── core/               # Engine, crawlers, config, delta state, OOB, rate limiter
+│   ├── core/               # Engine, crawlers, config, findings DB, scheduler, prioritizer
 │   ├── modules/            # 61 vulnerability detection modules
 │   ├── templates/          # Built-in Nuclei-compatible YAML (CVEs, misconfigs, panels)
-│   ├── ai/                 # Claude API: verifier, reporter, CVE researcher, template selector
+│   ├── ai/                 # 5-provider AI: verifier, reporter, CVE researcher, template selector
 │   ├── reporters/          # PDF, SARIF, Burp XML, ZAP JSON, Jira, GitHub
 │   ├── compliance/         # ISO 27001, HIPAA, GDPR, APPI mapping
 │   ├── api/                # HTTP API server
@@ -695,7 +812,6 @@ kagesec/
 │   └── utils/              # HTTP helpers, payload loading
 ├── engine/                 # Go template engine (kagesec-engine)
 │   ├── main.go
-│   ├── cmd/root.go         # CLI flags
 │   ├── template/           # YAML loader, executor, matcher, selector
 │   ├── runner/engine.go    # Goroutine pool, work distribution
 │   ├── output/streamer.go  # JSON Lines real-time output
@@ -707,8 +823,7 @@ kagesec/
 ├── tests/
 │   ├── unit/
 │   └── integration/        # DVWA, WebGoat, OWASP Juice Shop
-├── reports/                # Scan output goes here (gitignored)
-├── helm/                   # Kubernetes Helm chart
+├── reports/                # Scan output (gitignored)
 ├── Dockerfile
 └── action.yml              # GitHub Actions composite action
 ```
@@ -717,15 +832,13 @@ kagesec/
 
 ## Contributing
 
-This project is, and probably always will be, a work in progress.
+This project is, and probably always will be, a work in progress. There's always another module to write, another CVE to template, another compliance control to map, or another edge case in a web framework that breaks everything in a fun new way.
 
-There's always another module to write, another CVE to template, another compliance control to map, or another edge case in a web framework that breaks everything in a fun new way. Security is a moving target and so is this tool.
-
-If you want to work on it together — whether you're a security researcher, a developer who found a bug, someone who wants to add a module for a vulnerability type we don't cover yet, or just someone who paid too much for a PTAA and wants to commiserate — reach out.
+If you want to work on it — security researcher, developer who found a bug, someone who wants to add a module, or someone who paid too much for a PTAA and wants to commiserate — reach out.
 
 📧 **zulhilmirahmat@protonmail.com**
 
-Pull requests, issues, ideas, war stories about enterprise security vendors, all welcome.
+Pull requests, issues, ideas, war stories about enterprise security vendors — all welcome.
 
 ---
 
@@ -733,16 +846,9 @@ Pull requests, issues, ideas, war stories about enterprise security vendors, all
 
 **Use this on systems you own or have permission to test. That's it. That's the rule.**
 
-KageSec actively sends attack payloads to targets. It is not a passive monitoring tool. Pointing it at someone else's server without permission is illegal in most jurisdictions — including the CFAA (US), Computer Misuse Act (UK), and similar laws worldwide. "I was just testing" is not a defence that has historically worked well in court.
+KageSec actively sends attack payloads to targets. It is not a passive monitoring tool. Pointing it at someone else's server without permission is illegal in most jurisdictions — including the CFAA (US), Computer Misuse Act (UK), and similar laws worldwide.
 
 The authors accept zero liability for misuse. This software is provided as-is.
-
-Responsible use means:
-
-- Written authorization before scanning anything you don't own
-- Respect rate limits and don't take down production systems
-- Disclose vulnerabilities responsibly to affected parties
-- Follow all applicable laws in your jurisdiction
 
 ---
 

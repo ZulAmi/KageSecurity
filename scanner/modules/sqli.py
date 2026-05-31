@@ -132,7 +132,9 @@ def _get_payloads(config):
     union = UNION_PAYLOADS[:cap]
     bool_pairs = BOOLEAN_PAYLOAD_PAIRS[:cap]
 
-    # Time-based payloads only at risk >= 2
+    # Time-based payloads at risk >= 2 only — mirrors sqlmap's level/risk separation.
+    # risk controls payload destructiveness (time-based can slow real user requests);
+    # level controls scan depth. Matching sqlmap: --risk 2 minimum for time-based.
     if risk >= 2:
         if dbms and dbms in _DBMS_BLIND:
             delay = 5 if risk >= 3 else 3

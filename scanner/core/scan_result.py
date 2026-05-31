@@ -96,6 +96,11 @@ class ScanResult:
     pages_crawled: int = 0
     scan_duration_seconds: float = 0.0
     errors: List[str] = field(default_factory=list)
+    # Cross-scan state: keys are (title, url, parameter) tuples → "new"|"repeated"|"regressed"
+    # Populated after scan by findings_db.classify_scan(). Not serialised to JSON.
+    scan_states: dict = field(default_factory=dict)
+    # Findings present in the previous scan but absent now — resolved since last run
+    resolved_findings: List[tuple] = field(default_factory=list)
 
     def __post_init__(self):
         # Internal dedup state — not part of the data model, not serialised

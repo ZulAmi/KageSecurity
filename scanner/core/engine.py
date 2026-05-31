@@ -440,13 +440,34 @@ def run_scan(
         _nuclei_extra = 600 if getattr(config, "nuclei_templates", False) else 0
         _module_budget = _base_budget + _nuclei_extra
 
+        # Priority ordering: passive/fast modules first so initial findings appear early.
+        # Executor processes futures in submission order up to `concurrency` workers.
+        _PASSIVE_FAST = frozenset({
+            "security_headers", "cookie_security", "cors", "csrf", "tls",
+            "version_disclosure", "debug_mode", "clickjacking",
+        })
+        _HEAVY = frozenset({"param_discovery", "path_discovery", "path_traversal"})
+
+        def _module_priority(m) -> int:
+            name = m.__name__.split(".")[-1]
+            if name in _PASSIVE_FAST:
+                return 0
+            if name in _HEAVY:
+                return 2
+            return 1
+
+        ordered_modules = sorted(active_modules, key=_module_priority)
+
         executor = ThreadPoolExecutor(max_workers=max(1, concurrency))
         _timed_out = False
+        _session_check_interval = 50   # Poll session check URL every N completed futures
+        _session_check_counter  = 0
+        _session_check_url = getattr(config, "login_session_check_url", "") or ""
         try:
             futures = {
                 executor.submit(_run_module, module, page, client, oob, config): (module, page)
                 for page in pages
-                for module in active_modules
+                for module in ordered_modules
                 if (page.url, module.__name__) not in completed_pairs
             }
             _total_work = len(futures)
@@ -477,6 +498,26 @@ def run_scan(
                         _done += 1
                         if progress_callback:
                             progress_callback(_done, _total_work, len(result.findings))
+                        # Periodic session check (StackHawk "test path" strategy):
+                        # every 50 completed futures, poll the check URL to verify
+                        # the session is still valid; re-auth if logged-out indicator fires.
+                        if _session_check_url and getattr(config, "login_flow", None):
+                            _session_check_counter += 1
+                            if _session_check_counter % _session_check_interval == 0:
+                                try:
+                                    _sc_resp = raw_client.get(_session_check_url, timeout=8)
+                                    _lo_pat = getattr(config, "login_logged_out_indicator", "") or ""
+                                    _li_pat = getattr(config, "login_logged_in_indicator", "") or ""
+                                    _body = _sc_resp.text or ""
+                                    _expired = False
+                                    if _lo_pat and re.search(_lo_pat, _body, re.I):
+                                        _expired = True
+                                    if _li_pat and _body and not re.search(_li_pat, _body, re.I):
+                                        _expired = True
+                                    if _expired and hasattr(crawler, "_authenticate"):
+                                        crawler._authenticate(config.login_flow)
+                                except Exception:
+                                    pass
                         if _deadline and time.time() > _deadline:
                             _budget_exceeded = True
                             result.errors.append(
@@ -532,9 +573,15 @@ def run_scan(
         result.compliance_reports = map_to_standards(result, config.compliance)
 
     report_md = None
-    if api_key:
-        result = verify_findings(result, api_key)
-        report_md = generate_report(result, api_key)
+    from scanner.ai.provider import detect as _detect_provider
+    _ai_provider, _ai_key = _detect_provider(
+        explicit_provider=getattr(config, "ai_provider", None) if config else None,
+        explicit_key=api_key or (getattr(config, "api_key", None) if config else None),
+    )
+    _ai_model = getattr(config, "ai_model", None) if config else None
+    if _ai_provider:
+        result = verify_findings(result, _ai_key, provider=_ai_provider, model=_ai_model)
+        report_md = generate_report(result, _ai_key, provider=_ai_provider, model=_ai_model)
 
     # Gap 28: save crawl state for next delta scan
     try:
@@ -543,9 +590,10 @@ def run_scan(
     except Exception:
         pass
 
-    # Persist to findings DB for trending
+    # Persist to findings DB and classify finding states (New/Repeated/Regressed/Resolved)
     try:
-        from scanner.core.findings_db import record_scan
+        from scanner.core.findings_db import record_scan, classify_scan
+        classify_scan(scan_id, result, config.target)   # populates result.scan_states + resolved_findings
         record_scan(scan_id, result)
     except Exception:
         pass
@@ -573,7 +621,13 @@ def _run_module(module, page, client, oob=None, config=None):
 
 
 def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
-    """Detect session expiry (401 or redirect to login) and re-authenticate.
+    """Detect session expiry and re-authenticate.
+
+    Detection signals (mirrors StackHawk loggedInIndicator/loggedOutIndicator and ZAP auth strategies):
+      1. HTTP 401 status code
+      2. Redirect to login URL
+      3. Response body matches login_logged_out_indicator regex
+      4. Response body does NOT match login_logged_in_indicator regex (when set)
 
     Returns True if re-auth was performed and the page should be revisited.
     """
@@ -582,13 +636,22 @@ def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
         return False
 
     status = getattr(page, "status_code", 200)
-    url = getattr(page, "url", "")
+    url    = getattr(page, "url", "")
+    body   = getattr(page, "body", "") or ""
 
     is_expired = (
         status == 401
         or (status in (301, 302, 303) and login_flow.url in url)
         or (status == 200 and login_flow.url in url)
     )
+
+    # Regex-based session verification — StackHawk / ZAP "Check every Response" strategy
+    logged_out_pat = getattr(config, "login_logged_out_indicator", "") or ""
+    logged_in_pat  = getattr(config, "login_logged_in_indicator",  "") or ""
+    if logged_out_pat and re.search(logged_out_pat, body, re.I):
+        is_expired = True
+    if logged_in_pat and body and not re.search(logged_in_pat, body, re.I):
+        is_expired = True
 
     if not is_expired:
         return False
