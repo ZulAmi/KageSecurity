@@ -67,9 +67,11 @@ class TestScanResultDeduplication:
         assert len(r.findings) == 1
 
     def test_same_location_keeps_higher_severity(self):
+        # Dedup key is (title, host, parameter) — same title+location with different
+        # severities should collapse to one finding at the higher severity.
         r = ScanResult(target="http://x.com")
         r.add_finding(_finding(title="XSS", severity=Severity.LOW, url="http://x.com/p?q=1", parameter="q"))
-        r.add_finding(_finding(title="SQLi", severity=Severity.CRITICAL, url="http://x.com/p?q=1", parameter="q"))
+        r.add_finding(_finding(title="XSS", severity=Severity.CRITICAL, url="http://x.com/p?q=1", parameter="q"))
         r.deduplicate()
         assert len(r.findings) == 1
         assert r.findings[0].severity == Severity.CRITICAL

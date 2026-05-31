@@ -36,7 +36,7 @@ The 50 findings are all real. Parameter discovery false positives — the classi
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
-![Version](https://img.shields.io/badge/version-0.2.3--beta-orange)
+![Version](https://img.shields.io/badge/version-0.2.4--beta-orange)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
