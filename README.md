@@ -4,28 +4,28 @@
 
 Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then got really into AI and AppSec workflows.
 
-## vs Nuclei CLI — Real Benchmark
+## Real Benchmark
 
-Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app), same template directory (`~/.kagesec/nuclei-templates`), same concurrency (50):
+Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app):
 
-| | KageSec | Nuclei CLI |
-|---|---|---|
-| **Total scan time** | **10m 35s** | **5m 22s** |
-| Pages / URLs scanned | 30 pages crawled | 1 URL |
-| Templates run | 146 (AI-selected from 10,406) | 9,028 templates |
-| **Active findings** | **21** | **25** |
-| **False positives** | **0** | unknown |
-| OS Command Injection | ✅ CRITICAL | ❌ |
-| Client-Side Template Injection | ✅ CRITICAL | ❌ |
-| XXE Injection | ✅ CRITICAL | ❌ |
-| DOM-Based XSS | ✅ HIGH | ❌ |
-| Reflected XSS | ✅ HIGH | ❌ |
-| CSRF | ✅ MEDIUM | ❌ |
-| Business Logic flaws | ✅ MEDIUM | ❌ |
-| Subdomain discovery | ✅ | ❌ |
-| Nuclei template findings | ✅ (matched) | ✅ |
+| | Result |
+|---|---|
+| **Total scan time** | **10m 35s** |
+| Pages crawled | 30 |
+| Templates run | 146 (AI-selected from 10,406) |
+| **Active findings** | **21** |
+| **False positives** | **0** |
+| OS Command Injection | ✅ CRITICAL |
+| Client-Side Template Injection | ✅ CRITICAL |
+| XXE Injection | ✅ CRITICAL |
+| DOM-Based XSS | ✅ HIGH |
+| Reflected XSS | ✅ HIGH |
+| SSI Injection | ✅ HIGH |
+| CSRF | ✅ MEDIUM |
+| Business Logic flaws | ✅ MEDIUM |
+| Subdomain discovery | ✅ INFO |
 
-**KageSec takes twice as long because it does twice as much.** Nuclei fires templates at one URL and stops. KageSec crawls 30 pages, runs 61 exploitation modules per page, and runs the template engine concurrently. AI narrows 10,000+ templates to the relevant subset for the detected stack — 146 templates in this run — then verifies every finding for exploitability and business impact. 3 findings were suppressed as false positives (HTTP 403 on `/admin`, HTTP 302 on `/logout`, missing Permissions-Policy), auditable in the `suppressed` array of the JSON report.
+KageSec crawls every page, runs 61 exploitation modules per page, and runs the template engine concurrently. AI narrows 10,000+ templates to the relevant subset for the detected stack — 146 in this run — then verifies every finding for exploitability and business impact. 3 findings were suppressed as false positives (HTTP 403 on `/admin`, HTTP 302 on `/logout`, missing Permissions-Policy), auditable in the `suppressed` array of the JSON report.
 
 Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
 
