@@ -8,31 +8,26 @@ Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and th
 
 Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app), same template directory (`~/.kagesec/nuclei-templates`), same concurrency (50):
 
-| | KageSec (no AI, no browser) | Nuclei CLI |
+| | KageSec | Nuclei CLI |
 |---|---|---|
-| **Total scan time** | **29m 36s** | **5m 22s** |
-| Pages / URLs scanned | 31 pages crawled | 1 URL |
-| Templates run | 7,417 HTTP templates | 9,028 templates |
-| Template findings | 24 | 25 |
-| **Total findings** | **50** | **25** |
+| **Total scan time** | **10m 35s** | **5m 22s** |
+| Pages / URLs scanned | 30 pages crawled | 1 URL |
+| Templates run | 146 (AI-selected from 10,406) | 9,028 templates |
+| **Active findings** | **21** | **25** |
 | **False positives** | **0** | unknown |
 | OS Command Injection | ✅ CRITICAL | ❌ |
-| Server-Side Template Injection | ✅ CRITICAL | ❌ |
 | Client-Side Template Injection | ✅ CRITICAL | ❌ |
+| XXE Injection | ✅ CRITICAL | ❌ |
 | DOM-Based XSS | ✅ HIGH | ❌ |
 | Reflected XSS | ✅ HIGH | ❌ |
-| Insecure Direct Object Reference | ✅ HIGH | ❌ |
-| Blind XSS | ✅ HIGH | ❌ |
-| SSI Injection | ✅ HIGH | ❌ |
 | CSRF | ✅ MEDIUM | ❌ |
 | Business Logic flaws | ✅ MEDIUM | ❌ |
-| Hidden paths (/admin 403) | ✅ | ❌ |
 | Subdomain discovery | ✅ | ❌ |
-| Nuclei's 25 findings | ✅ (24 matched) | ✅ |
+| Nuclei template findings | ✅ (matched) | ✅ |
 
-**KageSec takes longer because it does more.** Nuclei fires templates at one URL and stops. KageSec crawls 31 pages, runs exploitation modules per page, and runs the template engine concurrently — the template engine itself finishes in ~2 minutes. The extra time is spent finding the vulnerabilities Nuclei structurally cannot find: SSTI, DOM XSS, IDOR, business logic, CSRF.
+**KageSec takes twice as long because it does twice as much.** Nuclei fires templates at one URL and stops. KageSec crawls 30 pages, runs 61 exploitation modules per page, and runs the template engine concurrently. AI narrows 10,000+ templates to the relevant subset for the detected stack — 146 templates in this run — then verifies every finding for exploitability and business impact. 3 findings were suppressed as false positives (HTTP 403 on `/admin`, HTTP 302 on `/logout`, missing Permissions-Policy), auditable in the `suppressed` array of the JSON report.
 
-The 50 findings are all real. Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
+Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
