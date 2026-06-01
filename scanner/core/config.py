@@ -68,3 +68,6 @@ class ScanConfig:
     login_logged_out_indicator: str = ""    # Regex matching response body when session has expired
     login_logged_in_indicator: str = ""     # Regex that must be present in body to confirm valid session
     login_session_check_url: str = ""       # URL to poll for session validity (StackHawk "test path")
+    nuclei_include_info: bool = False       # Include INFO-severity Nuclei findings (noisy OSINT templates — off by default)
+    stats: bool = False                     # Mirror of --stats CLI flag; gates engine progress prints to avoid ANSI bar corruption
+    concurrency: int = 8                    # Thread-pool workers; also used to scale Go engine goroutines and rate limit

@@ -67,39 +67,41 @@ class TestExtractVersion:
 class TestGetPayloads:
     def test_level1_caps_payloads(self):
         config = ScanConfig(target="http://x.com", level=1, risk=1)
-        err, blind, union, bools = _get_payloads(config)
+        err, blind, union, bools, _ = _get_payloads(config)
         assert len(err) <= 3
         assert len(union) <= 3
 
     def test_level3_more_payloads(self):
         config = ScanConfig(target="http://x.com", level=3, risk=2)
-        err, blind, union, bools = _get_payloads(config)
+        err, blind, union, bools, _ = _get_payloads(config)
         assert len(err) <= 10
 
-    def test_risk1_no_blind(self):
+    def test_risk1_includes_blind(self):
         config = ScanConfig(target="http://x.com", risk=1)
-        _, blind, _, _ = _get_payloads(config)
-        assert blind == []
+        _, blind, _, _, delay = _get_payloads(config)
+        assert len(blind) > 0
+        assert delay == 1  # risk=1 → 1s delay to fit under tight server timeouts
 
     def test_risk2_includes_blind(self):
         config = ScanConfig(target="http://x.com", risk=2)
-        _, blind, _, _ = _get_payloads(config)
+        _, blind, _, _, _ = _get_payloads(config)
         assert len(blind) > 0
 
     def test_dbms_mysql_payloads(self):
         config = ScanConfig(target="http://x.com", dbms="mysql", risk=2, level=5)
-        err, blind, _, _ = _get_payloads(config)
+        err, blind, _, _, _ = _get_payloads(config)
         assert any("SLEEP" in p or "EXTRACTVALUE" in p for p in err)
 
     def test_dbms_mssql_blind(self):
         config = ScanConfig(target="http://x.com", dbms="mssql", risk=2, level=5)
-        _, blind, _, _ = _get_payloads(config)
+        _, blind, _, _, _ = _get_payloads(config)
         assert any("WAITFOR" in p for p in blind)
 
     def test_none_config_uses_defaults(self):
-        err, blind, union, bools = _get_payloads(None)
+        err, blind, union, bools, delay = _get_payloads(None)
         assert len(err) > 0
-        assert blind == []
+        assert len(blind) > 0
+        assert delay == 1  # default risk=1 → 1s delay
 
 
 class TestWafBypassPayloads:

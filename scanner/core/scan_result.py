@@ -156,12 +156,15 @@ class ScanResult:
             self.findings = list(self._dedup_map.values())
 
     def summary(self) -> dict:
+        active = [f for f in self.findings if not f.false_positive_suppressed]
         counts = {s.value: 0 for s in Severity}
-        for f in self.findings:
+        for f in active:
             counts[f.severity.value] += 1
+        suppressed = len(self.findings) - len(active)
         return {
             "target": self.target,
-            "total_findings": len(self.findings),
+            "total_findings": len(active),
+            "suppressed_as_fp": suppressed,
             "by_severity": counts,
             "pages_crawled": self.pages_crawled,
             "duration_seconds": self.scan_duration_seconds,

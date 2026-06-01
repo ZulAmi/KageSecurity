@@ -128,6 +128,7 @@ def main():
     scan_cmd.add_argument("--templates", nargs="+", metavar="DIR", help="Extra YAML template directories")
     scan_cmd.add_argument("--skip-templates", action="store_true", help="Disable built-in YAML template scanning")
     scan_cmd.add_argument("--nuclei-templates", action="store_true", help="Include Nuclei community templates (~10k templates, slow without --api-key)")
+    scan_cmd.add_argument("--nuclei-info", action="store_true", help="Include INFO-severity Nuclei findings (disabled by default — most are OSINT noise)")
     scan_cmd.add_argument(
         "--parallel", type=int, default=1, metavar="N",
         help="Number of targets to scan concurrently when using --targets (default: 1 = sequential)",
@@ -149,7 +150,7 @@ def main():
         help="Number of module-threads per page (default: 8). Increase for fast targets, decrease to be polite.",
     )
     scan_cmd.add_argument(
-        "--rate-limit", type=int, default=10, metavar="RPS",
+        "--rate-limit", type=int, default=None, metavar="RPS",
         help="Maximum HTTP requests per second across the whole scan (default: 10).",
     )
     scan_cmd.add_argument(
@@ -674,6 +675,9 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         nvd_api_key=args.nvd_api_key,
         template_dirs=args.templates or [],
         nuclei_templates=getattr(args, "nuclei_templates", False),
+        nuclei_include_info=getattr(args, "nuclei_info", False),
+        stats=getattr(args, "stats", False),
+        concurrency=getattr(args, "concurrency", 8),
         proxy=getattr(args, "proxy", None),
         passive=getattr(args, "passive", False),
         follow_robots=getattr(args, "follow_robots", False),
@@ -681,7 +685,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         oob_server=getattr(args, "oob_server", None) or "oast.pro",
         include_patterns=getattr(args, "include", None) or [],
         exclude_patterns=getattr(args, "exclude", None) or [],
-        rate_limit_rps=getattr(args, "rate_limit", 10),
+        rate_limit_rps=getattr(args, "rate_limit", None) or 10,
         har_file=getattr(args, "har", None),
         wsdl_url=getattr(args, "wsdl", None),
         jwt_wordlist=getattr(args, "jwt_wordlist", None),
@@ -811,7 +815,34 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     _updater.check_for_updates(auto=getattr(args, "auto_update", False))
 
     import datetime as _dt
+    import threading as _threading
     _scan_start_wall = _dt.datetime.now()
+    _stats = getattr(args, "stats", False)
+
+    # Resource sampling for --stats (psutil optional — gracefully skipped if absent)
+    _psutil_proc = None
+    _mem_samples: list = []
+    _cpu_samples: list = []
+    _resource_done = _threading.Event()
+    if _stats:
+        try:
+            import psutil as _psutil
+            import os as _os_ps
+            _psutil_proc = _psutil.Process(_os_ps.getpid())
+            _psutil_proc.cpu_percent(interval=None)  # prime the counter
+
+            def _resource_sampler():
+                while not _resource_done.is_set():
+                    try:
+                        _mem_samples.append(_psutil_proc.memory_info().rss)
+                        _cpu_samples.append(_psutil_proc.cpu_percent(interval=None))
+                    except Exception:
+                        pass
+                    _resource_done.wait(timeout=2)
+
+            _threading.Thread(target=_resource_sampler, daemon=True).start()
+        except ImportError:
+            sys.stderr.write("[!] psutil not installed — `pip install psutil` to enable resource stats\n")
     print(f"[*] Scan ID: {current_scan_id}")
     print(f"[*] Started: {_scan_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"[*] Target:  {target}")
@@ -827,27 +858,51 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         print(f"[*] Compliance: {', '.join(config.compliance).upper()}")
     print()
 
-    # Progress bar (--stats) — renders on stderr so it doesn't pollute stdout reports
-    _stats = getattr(args, "stats", False)
+    # Progress bar (--stats) — renders on stderr so it doesn't pollute stdout reports.
+    # Uses ANSI save/restore cursor to stay stable when stdout (--live findings) adds
+    # newlines that would otherwise corrupt the \r-based progress position.
     _progress_cb = None
+    _stderr_is_tty = hasattr(sys.stderr, "fileno") and sys.stderr.isatty()
     if _stats and not _no_color:
-
-        def _progress_cb(done: int, total: int, findings: int):
-            if total == 0:
-                return
-            pct = done / total
-            filled = int(30 * pct)
-            bar = "\033[92m" + "█" * filled + "\033[90m" + "░" * (30 - filled) + "\033[0m"
-            line = (
-                f"\r[{bar}] {pct * 100:5.1f}%  "
-                f"{done}/{total} checks  "
-                f"{findings} finding{'s' if findings != 1 else ''}   "
-            )
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            if done == total:
-                sys.stderr.write("\r" + " " * len(line) + "\r")
+        if _stderr_is_tty:
+            # ANSI-capable terminal: anchor the bar to the last screen line so
+            # stdout newlines never overwrite it.
+            def _progress_cb(done: int, total: int, findings: int):
+                if total == 0:
+                    return
+                pct = done / total
+                filled = int(30 * pct)
+                bar = "\033[92m" + "█" * filled + "\033[90m" + "░" * (30 - filled) + "\033[0m"
+                content = (
+                    f"[{bar}] {pct * 100:5.1f}%  "
+                    f"{done}/{total} checks  "
+                    f"{findings} finding{'s' if findings != 1 else ''}   "
+                )
+                # \033[s  save cursor | \033[999B  move to bottom | \r  col 0
+                # \033[2K clear line  | print bar | \033[u  restore cursor
+                sys.stderr.write(f"\033[s\033[999B\r\033[2K{content}\033[u")
                 sys.stderr.flush()
+                if done == total:
+                    sys.stderr.write("\033[s\033[999B\r\033[2K\033[u")
+                    sys.stderr.flush()
+        else:
+            # Non-TTY (pipe/redirect): fall back to simple \r line
+            def _progress_cb(done: int, total: int, findings: int):
+                if total == 0:
+                    return
+                pct = done / total
+                filled = int(30 * pct)
+                bar = "█" * filled + "░" * (30 - filled)
+                line = (
+                    f"\r[{bar}] {pct * 100:5.1f}%  "
+                    f"{done}/{total} checks  "
+                    f"{findings} finding{'s' if findings != 1 else ''}   "
+                )
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                if done == total:
+                    sys.stderr.write("\r" + " " * len(line) + "\r")
+                    sys.stderr.flush()
 
     workflow_name = getattr(args, "workflow", None)
     if workflow_name:
@@ -926,8 +981,21 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     print(f"[+] Started:        {_scan_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"[+] Finished:       {_scan_end_wall.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"[+] Duration:       {_dur_fmt}  ({dur:.1f}s){rps_hint}")
+    if _stats and _psutil_proc:
+        _resource_done.set()
+        if _mem_samples:
+            _peak_mb = max(_mem_samples) / 1024 / 1024
+            print(f"[+] Peak memory:    {_peak_mb:.0f} MB")
+        if _cpu_samples:
+            _avg_cpu = sum(_cpu_samples) / len(_cpu_samples)
+            print(f"[+] Avg CPU:        {_avg_cpu:.1f}%")
     print(f"[+] Pages crawled:  {pages}")
-    print(f"[+] Findings:       {summary['total_findings']} total")
+    suppressed_count = summary.get("suppressed_as_fp", 0)
+    print(f"[+] Findings:       {summary['total_findings']} total", end="")
+    if suppressed_count:
+        _yc = "" if _no_color_out else "\033[93m"
+        print(f"  ({_yc}{suppressed_count} suppressed as false positive by AI{_R})", end="")
+    print()
     for severity, count in summary["by_severity"].items():
         if count:
             sev_color = {"critical": "\033[91m", "high": "\033[91m", "medium": "\033[93m",
@@ -1059,33 +1127,34 @@ def _write_reports(args, result, report_md, slug: str) -> None:
 
 def _findings_dict(result) -> dict:
     summary = result.summary()
+
+    def _serialise(f):
+        return {
+            "title": f.title,
+            "severity": f.severity.value,
+            "owasp_category": f.owasp_category,
+            "url": f.url,
+            "parameter": f.parameter,
+            "payload": f.payload,
+            "evidence": f.evidence,
+            "verified": f.verified,
+            "confidence": f.confidence,
+            "ai_verdict": f.ai_verdict,
+            "ai_analysis": f.ai_analysis,
+            "ai_exploitability": f.ai_exploitability,
+            "ai_business_impact": f.ai_business_impact,
+            "ai_attack_scenario": f.ai_attack_scenario,
+            "cwe": f.cwe,
+            "cvss": f.cvss,
+            "remediation": f.remediation,
+            "standards": f.standards,
+            "poc_curl": f.poc_curl,
+        }
+
     return {
         "summary": summary,
-        "findings": [
-            {
-                "title": f.title,
-                "severity": f.severity.value,
-                "owasp_category": f.owasp_category,
-                "url": f.url,
-                "parameter": f.parameter,
-                "payload": f.payload,
-                "evidence": f.evidence,
-                "verified": f.verified,
-                "confidence": f.confidence,
-                "ai_verdict": f.ai_verdict,
-                "ai_analysis": f.ai_analysis,
-                "ai_exploitability": f.ai_exploitability,
-                "ai_business_impact": f.ai_business_impact,
-                "ai_attack_scenario": f.ai_attack_scenario,
-                "cwe": f.cwe,
-                "cvss": f.cvss,
-                "remediation": f.remediation,
-                "standards": f.standards,
-                "poc_curl": f.poc_curl,
-            }
-            for f in result.findings
-            if not f.false_positive_suppressed
-        ],
+        "findings": [_serialise(f) for f in result.findings if not f.false_positive_suppressed],
+        "suppressed": [_serialise(f) for f in result.findings if f.false_positive_suppressed],
         "compliance": [cr.summary() for cr in result.compliance_reports],
     }
 

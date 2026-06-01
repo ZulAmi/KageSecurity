@@ -32,13 +32,24 @@ def test(page: CrawlResult, client) -> List[Finding]:
     findings = []
     params = get_url_params(page.url)
     for param in params:
+        # Fetch a benign baseline first — some signatures (uid=, PATH=) appear in
+        # responses from CSTI/SSTI execution on the same parameter. Only flag
+        # signatures that are absent from the clean response.
+        baseline_url = inject_url_param(page.url, param, "kagesec_ssi_probe")
+        baseline_resp = fetch(client, "get", baseline_url)
+        baseline_body = getattr(baseline_resp, "text", "") if baseline_resp else ""
+        baseline_present = {s for s in _SIGNATURES if s in baseline_body}
+        check_sigs = [s for s in _SIGNATURES if s not in baseline_present]
+        if not check_sigs:
+            continue
+
         for payload in _PAYLOADS:
             url = inject_url_param(page.url, param, payload)
             resp = fetch(client, "get", url)
             if not resp:
                 continue
             body = getattr(resp, "text", "")
-            matched = next((s for s in _SIGNATURES if s in body), None)
+            matched = next((s for s in check_sigs if s in body), None)
             if matched:
                 findings.append(_finding(page.url, param, payload, matched))
                 break
@@ -47,13 +58,22 @@ def test(page: CrawlResult, client) -> List[Finding]:
         inputs = [i["name"] for i in form["inputs"] if i["name"]]
         if not inputs:
             continue
+        # Baseline for forms: submit with neutral values
+        baseline_data = {name: "kagesec_ssi_probe" for name in inputs}
+        baseline_resp = fetch(client, form["method"], form["action"], baseline_data)
+        baseline_body = getattr(baseline_resp, "text", "") if baseline_resp else ""
+        baseline_present = {s for s in _SIGNATURES if s in baseline_body}
+        check_sigs = [s for s in _SIGNATURES if s not in baseline_present]
+        if not check_sigs:
+            continue
+
         for payload in _PAYLOADS[:3]:
             data = {name: payload for name in inputs}
             resp = fetch(client, form["method"], form["action"], data)
             if not resp:
                 continue
             body = getattr(resp, "text", "")
-            matched = next((s for s in _SIGNATURES if s in body), None)
+            matched = next((s for s in check_sigs if s in body), None)
             if matched:
                 findings.append(_finding(form["action"], inputs[0], payload, matched))
                 break

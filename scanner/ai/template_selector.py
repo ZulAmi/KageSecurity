@@ -108,8 +108,8 @@ def _save_cache(fp: dict[str, str], selection: dict) -> None:
 # AI call
 # ---------------------------------------------------------------------------
 
-def _ask_claude(fp: dict[str, str], api_key: str, provider: str = "anthropic", model: str | None = None) -> dict:
-    """Ask the AI which tags/CVEs are relevant for this stack. Returns selection dict."""
+def _ask_ai(fp: dict[str, str], api_key: str, provider: str = "anthropic", model: str | None = None) -> dict:
+    """Ask the configured AI provider which tags/CVEs are relevant for this stack."""
     from scanner.ai.provider import complete as ai_complete
 
     # For template selection we want the cheapest/fastest model per provider
@@ -121,8 +121,21 @@ def _ask_claude(fp: dict[str, str], api_key: str, provider: str = "anthropic", m
     }
     resolved_model = model or _cheap.get(provider)
 
-    tech_lines = "\n".join(f"  - {k}: {v}" for k, v in fp.items())
-    prompt = f"Technology stack detected:\n{tech_lines}\n\nWhich template tags, CVE IDs, and keywords are most relevant?"
+    if fp:
+        tech_lines = "\n".join(f"  - {k}: {v}" for k, v in fp.items())
+        prompt = (
+            f"Technology stack detected:\n{tech_lines}\n\n"
+            "Which template tags, CVE IDs, and keywords are most relevant?"
+        )
+    else:
+        prompt = (
+            "No specific tech stack was detected on this target. "
+            "Select the most important and broadly applicable template categories "
+            "for a modern web application. Focus on: XSS, SQLi, SSRF, RCE, LFI, "
+            "path traversal, file upload, deserialization, SSTI, XXE, open redirect, "
+            "exposed sensitive files, and common misconfigurations. "
+            "Return broad tags that cover generic web vulnerabilities."
+        )
 
     raw = ai_complete(
         system=_SYSTEM_PROMPT,
@@ -194,7 +207,7 @@ def select_templates(
 
     Falls back to all templates if AI selection fails.
     """
-    if not fingerprints or not api_key or not all_templates:
+    if not api_key or not all_templates:
         return all_templates
 
     # Cache hit
@@ -207,7 +220,7 @@ def select_templates(
         }
     else:
         try:
-            selection = _ask_claude(fingerprints, api_key, provider=provider, model=model)
+            selection = _ask_ai(fingerprints, api_key, provider=provider, model=model)
             _save_cache(fingerprints, {
                 "tags":     list(selection["tags"]),
                 "cve_ids":  list(selection["cve_ids"]),
@@ -228,8 +241,11 @@ def select_templates(
 def summarise_selection(fingerprints: dict, selected: list, total: int) -> str:
     """Human-readable summary for CLI output."""
     pct = 100 * len(selected) // total if total else 0
-    stack = ", ".join(f"{v}" for v in list(fingerprints.values())[:4])
+    if fingerprints:
+        stack = ", ".join(f"{v}" for v in list(fingerprints.values())[:4])
+    else:
+        stack = "no stack detected — generic selection"
     return (
-        f"[AI] Stack: {stack or 'unknown'} → "
+        f"[AI] Stack: {stack} → "
         f"selected {len(selected)}/{total} templates ({pct}%)"
     )

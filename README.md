@@ -36,7 +36,7 @@ The 50 findings are all real. Parameter discovery false positives — the classi
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
-![Version](https://img.shields.io/badge/version-0.2.4--beta-orange)
+![Version](https://img.shields.io/badge/version-0.2.5--beta-orange)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
@@ -123,7 +123,7 @@ The `.claude/` folder includes a hook that fires after any deployment Bash comma
 
 - **61 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, there's a module for it.
 - **Go template engine** — `kagesec-engine` runs 7,417 HTTP-compatible Nuclei templates with 50 goroutines, real-time streaming, and confidence scoring. ~2 minutes for 7,417 templates. With an AI key, Claude narrows templates to 80-200 relevant ones for your stack.
-- **5 AI providers** — Anthropic Claude, OpenAI GPT-4o, Google Gemini, Mistral, and Ollama (local, no key required). AI verifies exploitability, classifies findings, and writes a human-readable report. Auto-detected from environment variables — no config needed.
+- **5 AI providers** — Anthropic Claude, OpenAI GPT-4o, Google Gemini, Mistral, and Ollama (local, no key required). Auto-detected from environment variables. If none are configured, an interactive menu prompts you at startup (skipped in CI/non-TTY environments).
 - **Zero false positives in parameter discovery** — canary-based comparison baseline matches the approach used by Burp Param Miner and Arjun. Two-tier wordlist (security-critical vs medium-confidence) with per-param attempt tracking.
 - **Finding state tracking** — every scan compares against the previous scan. Findings are classified as `NEW`, `REPEATED`, `REGRESSED` (was fixed, broke again), or `RESOLVED` (fixed since last scan). Modelled on Burp Enterprise's issue tracking.
 - **"Fix These First" prioritization** — after each scan, findings are scored by CVSS + AI exploitability verdict + finding state + severity tier and ranked. No more "here are 50 findings, good luck." Modelled on Bright Security's two-lens approach.
@@ -132,7 +132,7 @@ The `.claude/` folder includes a hook that fires after any deployment Bash comma
 - **Headless browser crawling** — Playwright handles SPAs and JS-heavy apps. Enabled by default.
 - **Full auth support** — Bearer tokens, cookies, OAuth2, multi-step logins, TOTP 2FA, session expiry re-auth.
 - **API scanning** — OpenAPI, GraphQL, gRPC, SOAP/WSDL, HAR import.
-- **5 report formats** — JSON, PDF, SARIF, Burp XML, ZAP JSON — all saved to `reports/`.
+- **6 report formats** — JSON, Markdown, PDF, SARIF, Burp XML, ZAP JSON — all saved to `reports/`.
 - **Compliance mapping** — ISO 27001, HIPAA, GDPR, APPI.
 - **CI/CD native** — GitHub Actions, `--fail-on high`, SARIF upload. Break the build before the attacker breaks your users.
 
@@ -146,13 +146,18 @@ pip install kagesec
 
 The `kagesec-engine` Go binary is bundled in the wheel — no manual build step required.
 
-Want the full experience?
+### Optional extras
 
 ```bash
-pip install "kagesec[browser]"              # Playwright (you probably want this)
+pip install "kagesec[browser]"              # Playwright headless browser (you probably want this)
 pip install "kagesec[pdf]"                  # PDF reports
 pip install "kagesec[dns]"                  # DNSSEC + subdomain enumeration
-pip install "kagesec[browser,pdf,dns]"      # The whole thing
+pip install "kagesec[claude]"               # MCP server for Claude Code integration
+pip install "kagesec[openai]"               # OpenAI GPT-4o provider
+pip install "kagesec[gemini]"               # Google Gemini provider
+pip install "kagesec[mistral]"              # Mistral Large provider
+pip install "kagesec[all-ai]"               # All AI provider SDKs
+pip install "kagesec[all]"                  # Everything — browser + dns + all AI
 ```
 
 After installing `browser`, grab Chromium:
@@ -193,6 +198,12 @@ kagesec scan https://target.example.com --profile stealth --rate-limit 2
 # Through Burp for manual review alongside
 kagesec scan https://target.example.com --proxy http://127.0.0.1:8080
 
+# Add a custom header to every request
+kagesec scan https://target.example.com -H "X-Api-Key: abc123" -H "X-Tenant: staging"
+
+# Tune SQLi payloads for a known database
+kagesec scan https://target.example.com --dbms postgres --risk 2
+
 # Prevent Mac from sleeping during long scans
 caffeinate -i kagesec scan https://target.example.com --nuclei-templates --stats
 ```
@@ -201,7 +212,7 @@ caffeinate -i kagesec scan https://target.example.com --nuclei-templates --stats
 
 ## AI Providers
 
-KageSec supports 5 AI providers. It auto-detects whichever one you have configured — no flags needed.
+KageSec supports 5 AI providers. It auto-detects whichever one you have configured via environment variables — no flags needed.
 
 ```bash
 # Anthropic Claude (recommended — best verification quality)
@@ -219,12 +230,34 @@ export MISTRAL_API_KEY=...
 # Ollama — local model, zero cost, no key needed
 # Just make sure Ollama is running: https://ollama.com
 export OLLAMA_URL=http://localhost:11434   # optional, this is the default
-
-# Override provider and model explicitly
-kagesec scan https://target.example.com --ai-provider gemini --ai-model gemini-1.5-pro
 ```
 
-Priority: Anthropic → OpenAI → Gemini → Mistral → Ollama. If none are available, the scan runs without AI and still produces full findings — you just won't get the verification layer or narrative report.
+**Priority:** Anthropic → OpenAI → Gemini → Mistral → Ollama.
+
+If no key is detected and stdin is a TTY, an interactive menu appears at startup:
+
+```
+[?] No AI key detected.
+    AI verification cuts false positives, scores exploitability,
+    and writes a human-readable report. Select a provider:
+
+    1. Anthropic Claude  —  claude.ai/settings — recommended
+    2. OpenAI GPT-4o     —  platform.openai.com/api-keys
+    3. Google Gemini     —  aistudio.google.com/app/apikey
+    4. Mistral Large     —  console.mistral.ai
+    5. Ollama (local)    —  no key needed — runs on your machine
+    6. Skip — run without AI
+```
+
+In CI/non-TTY environments the menu is skipped automatically and the scan runs without AI.
+
+Override the model explicitly with `--ai-model`:
+
+```bash
+kagesec scan https://target.example.com --ai-model gemini-1.5-pro
+```
+
+If no AI provider is available, the scan still runs all 61 modules and produces full findings — you just won't get the AI triage layer or the narrative Markdown report.
 
 AI verification batches findings in groups of 10, classifies each as `true_positive`, `false_positive`, or `needs_manual_review`, and scores exploitability and business impact.
 
@@ -240,6 +273,9 @@ kagesec scan https://api.example.com --auth-bearer eyJhbGc...
 
 # Session cookie
 kagesec scan https://app.example.com --auth-cookie "session=abc123"
+
+# Netscape-format cookie jar (exported from browser DevTools or curl)
+kagesec scan https://app.example.com --cookie-jar ./cookies.txt
 
 # OAuth2 client credentials
 kagesec scan https://api.example.com \
@@ -386,6 +422,26 @@ kagesec scan https://api.example.com --wsdl https://api.example.com/service?wsdl
 # Import a HAR file (great for scanning authenticated flows recorded in Chrome DevTools)
 kagesec scan https://app.example.com --har ./session.har
 ```
+
+---
+
+## Scan Workflows
+
+Workflows chain scan steps with conditions — useful for parameterized scans or target-specific playbooks.
+
+```bash
+# Run a built-in workflow
+kagesec scan https://target.example.com --workflow quick-web
+kagesec scan https://wordpress.example.com --workflow wordpress
+
+# List available workflows
+kagesec workflows
+
+# Use a custom workflow YAML
+kagesec scan https://target.example.com --workflow ~/.kagesec/workflows/my-playbook.yaml
+```
+
+Custom workflows live in `~/.kagesec/workflows/` or can be referenced by file path.
 
 ---
 
@@ -551,8 +607,9 @@ kagesec scan https://target.example.com --nuclei-templates
 All reports are saved to the `reports/` folder automatically.
 
 ```bash
-kagesec scan https://target.example.com --output json      # default
-kagesec scan https://target.example.com --output pdf       # stakeholder-ready
+kagesec scan https://target.example.com --output json      # default — machine-readable
+kagesec scan https://target.example.com --output markdown  # human-readable text report
+kagesec scan https://target.example.com --output pdf       # stakeholder-ready (requires kagesec[pdf])
 kagesec scan https://target.example.com --output all       # every format at once
 kagesec scan https://target.example.com --output sarif     # GitHub Code Scanning
 kagesec scan https://target.example.com --output burp      # Burp Suite XML
@@ -628,6 +685,17 @@ kagesec scan https://target.example.com --fail-on high
 ```
 
 Exit code `1` if findings at or above the specified severity are found; `0` if clean.
+
+### GitHub Actions environment variables
+
+The `action.yml` composite action sets `KAGESEC_*` variables that override CLI flags — useful for CI-specific behaviour without changing the command line:
+
+| Variable | Effect |
+|---|---|
+| `KAGESEC_NO_AI=1` | Disable AI verification |
+| `KAGESEC_PASSIVE=1` | Switch to passive mode |
+| `KAGESEC_MODULES="xss sqli"` | Restrict to these modules |
+| `KAGESEC_EXCLUDE="*/logout*"` | Skip URL patterns |
 
 ### Delta Scanning
 
@@ -734,27 +802,52 @@ Supports Slack, Teams, Discord, and generic JSON webhooks.
 | ----------------------------- | ------- | ------------------------------------------------------------ |
 | `--depth N`                   | 3       | Crawl depth                                                  |
 | `--max-pages N`               | 100     | Max pages to crawl                                           |
-| `--level 1-5`                 | 1       | Scan aggressiveness                                          |
-| `--risk 1-3`                  | 1       | Risk tolerance (risk≥2 enables time-based SQLi)              |
+| `--level 1-5`                 | 1       | Scan aggressiveness (1=safe, 3=standard, 5=maximum)          |
+| `--risk 1-3`                  | 1       | Risk of side-effects (risk≥2 enables time-based SQLi)        |
 | `--browser`                   | **on**  | Playwright headless crawling (`--no-browser` to disable)     |
 | `--passive`                   | off     | No injection — headers and content only                      |
+| `--follow-robots`             | off     | Respect robots.txt Disallow rules during crawl               |
 | `--live`                      | off     | Print findings as discovered                                 |
-| `--stats`                     | off     | Progress bar on stderr                                       |
-| `--no-ai`                     | off     | Skip AI verification                                         |
-| `--ai-provider NAME`          | auto    | anthropic \| openai \| gemini \| mistral \| ollama           |
+| `--stats`                     | off     | Progress bar on stderr (includes peak memory and avg CPU with psutil) |
+| `-v`, `--verbose`             | off     | Print each URL and module as it runs                         |
+| `--no-color`                  | off     | Disable ANSI color codes (for log files and CI)              |
+| `--no-ai`                     | off     | Skip AI verification entirely                                |
+| `--ai-model MODEL`            | auto    | Override model for the selected AI provider                  |
+| `--ollama-url URL`            | —       | Ollama base URL (default: `http://localhost:11434`)          |
 | `--fail-on LEVEL`             | —       | Exit 1 if findings at this severity or above                 |
-| `--output FORMAT`             | json    | json / pdf / sarif / burp / zap / all                        |
+| `--output FORMAT`             | json    | json / markdown / pdf / sarif / burp / zap / all            |
 | `--modules M1 M2`             | all     | Run only specific modules                                    |
-| `--nuclei-templates`          | off     | Include 10k+ Nuclei community templates                      |
-| `--profile NAME`              | —       | Apply a scan preset                                          |
+| `--nuclei-templates`          | off     | Include ~10k Nuclei community templates                      |
+| `--nuclei-info`               | off     | Include INFO-severity Nuclei findings (noisy OSINT — off by default) |
+| `--skip-templates`            | off     | Disable built-in YAML template scanning                      |
+| `--profile NAME`              | —       | Apply a scan preset (quick / full / api / passive / stealth) |
+| `--workflow NAME_OR_FILE`     | —       | Run a YAML workflow (built-in: quick-web, wordpress)         |
 | `--resume ID`                 | —       | Resume an interrupted scan                                   |
 | `--full`                      | off     | Force full rescan (skip delta optimization)                  |
 | `--max-time MIN`              | 0       | Hard time limit in minutes                                   |
+| `-H NAME:VALUE`               | —       | Custom HTTP header on every request (repeatable)             |
+| `--user-agent UA`             | —       | Custom User-Agent string                                     |
+| `--random-agent`              | off     | Rotate User-Agent randomly per request                       |
+| `--cookie-jar FILE`           | —       | Netscape-format cookie jar file                              |
+| `--timeout SECONDS`           | 10      | Per-request HTTP timeout                                     |
+| `--retries N`                 | 0       | Retry failed HTTP requests N times                           |
+| `--concurrency N`             | 8       | Module threads per page                                      |
+| `--rate-limit RPS`            | 10      | HTTP requests per second                                     |
+| `--proxy URL`                 | —       | HTTP/HTTPS proxy URL                                         |
+| `--include PATTERN`           | —       | Only crawl URLs matching these glob patterns (repeatable)    |
+| `--exclude PATTERN`           | —       | Skip URLs matching these glob patterns (repeatable)          |
+| `--dbms NAME`                 | auto    | DBMS hint for SQLi payloads (mysql/postgres/mssql/oracle/sqlite) |
+| `--extensions LIST`           | —       | Comma-separated extensions for path discovery (e.g. `.php,.bak`) |
+| `--filter-status CODES`       | —       | Suppress HTTP codes from discovery output (e.g. `404,301`)  |
+| `--wordlist FILE`             | —       | Custom path discovery wordlist                               |
+| `--param-wordlist FILE`       | —       | Custom parameter discovery wordlist                          |
+| `--jwt-wordlist FILE`         | —       | Custom JWT secrets wordlist                                  |
+| `--subdomain-wordlist FILE`   | —       | Custom subdomain enumeration wordlist                        |
+| `--policy FILE`               | —       | Scan policy YAML — per-module enable/strength/timeout overrides |
+| `--auto-update`               | off     | Auto-download newer Nuclei templates if available            |
 | `--login-logged-out REGEX`    | —       | Re-auth trigger: regex matching response when session expires |
 | `--login-logged-in REGEX`     | —       | Re-auth trigger: regex that must be present for valid session |
 | `--login-session-check URL`   | —       | URL polled every 50 checks to verify session validity        |
-| `--concurrency N`             | 8       | Module threads per page                                      |
-| `--rate-limit RPS`            | 10      | HTTP requests per second                                     |
 
 ### `schedule` Subcommands
 
@@ -784,7 +877,7 @@ No AI key? KageSec runs all 61 modules and produces full reports without one. Yo
 
 ## Stack
 
-- **Orchestration:** Python 3.12+
+- **Orchestration:** Python 3.12 / 3.13
 - **Template engine:** Go 1.22+ (`kagesec-engine` — 50 goroutines, real-time JSON Lines output)
 - **HTTP client:** httpx (Python), `net/http` (Go engine)
 - **Browser:** Playwright (Chromium)

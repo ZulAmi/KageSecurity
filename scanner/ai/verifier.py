@@ -60,27 +60,26 @@ def _analyze_batch(batch: list[Finding], api_key: str, provider: str, model: str
         for f in batch
     ]
 
-    raw = ai_complete(
-        system=SYSTEM_PROMPT,
-        user=json.dumps(payload),
-        api_key=api_key,
-        provider=provider,
-        model=model,
-    ).strip()
-    if raw.startswith("```"):
-        parts = raw.split("```")
-        raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw
-
     try:
+        raw = ai_complete(
+            system=SYSTEM_PROMPT,
+            user=json.dumps(payload),
+            api_key=api_key,
+            provider=provider,
+            model=model,
+        ).strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1].lstrip("json").strip() if len(parts) >= 2 else raw
+
         result = json.loads(raw)
         if isinstance(result, list) and len(result) == len(batch):
             return result
-        # Wrapped under a key
         if isinstance(result, dict):
             for v in result.values():
                 if isinstance(v, list) and len(v) == len(batch):
                     return v
-    except (json.JSONDecodeError, ValueError):
+    except Exception:
         pass
 
     return [_DEFAULT_VERDICT.copy() for _ in batch]
@@ -96,7 +95,10 @@ def _apply_verdict(finding: Finding, verdict: dict, scan_result: ScanResult) -> 
     finding.ai_attack_scenario = verdict.get("attack_scenario", "")
 
     ai_confidence = float(verdict.get("confidence", 0.5))
-    finding.confidence = min(finding.confidence, ai_confidence)
+    if v == "true_positive":
+        finding.confidence = max(finding.confidence, ai_confidence)
+    elif v == "needs_manual_review":
+        finding.confidence = min(finding.confidence, ai_confidence)
 
     finding.verified = v == "true_positive"
 

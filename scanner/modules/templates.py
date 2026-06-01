@@ -197,10 +197,10 @@ def _run_engine(
         "-target",      target,
         "-templates",   templates_dir,
         "-fingerprint", json.dumps(fp),
-        "-concurrency", "50",
+        "-concurrency", str(min(max(50, getattr(config, "concurrency", 8) * 6), 200)),
         "-rate-limit",  str(rate),
         "-timeout",     "10",
-        "-severity",    "info,low,medium,high,critical",
+        "-severity",    "info,low,medium,high,critical" if getattr(config, "nuclei_include_info", False) else "low,medium,high,critical",
     ]
     if oob_server:
         cmd += ["-oob-url", oob_server]
@@ -250,7 +250,10 @@ def _run_engine(
             done  = msg.get("done", 0)
             total = msg.get("total", 0)
             found = msg.get("findings", 0)
-            if total > 0 and done % 500 == 0:
+            # Suppress when --stats is on: stdout newlines corrupt the ANSI-positioned
+            # progress bar on stderr. Non-stats scans continue to receive these lines.
+            _quiet = getattr(config, "stats", False)
+            if total > 0 and done % 500 == 0 and not _quiet:
                 print(
                     f"[engine] {done}/{total} templates  |  {found} findings",
                     flush=True,

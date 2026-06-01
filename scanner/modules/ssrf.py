@@ -1,4 +1,5 @@
 import httpx
+import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from typing import List
 from scanner.core.scan_result import Finding, Severity
@@ -13,7 +14,28 @@ def reset() -> None:
 
 _DEFAULT_CANARY = "kagesec-canary.invalid"
 
-_HARDCODED_URL_PARAMS = {"url", "redirect", "next", "src", "href", "image", "uri", "path", "dest", "target", "fetch", "load", "file", "link", "proxy"}
+_HARDCODED_URL_PARAMS = {
+    # core
+    "url", "redirect", "next", "src", "href", "image", "uri", "path",
+    "dest", "target", "fetch", "load", "file", "link", "proxy",
+    # webhook / notification callbacks (common in CI/CD, payment, SaaS)
+    "webhook", "webhookurl", "webhook_url", "callbackurl", "callback_url",
+    "callback", "notify", "notifyurl", "notify_url", "pingback", "ping",
+    "postback", "endpoint", "hook",
+    # return / redirect flows (OAuth, e-commerce, SSO)
+    "returnurl", "return_url", "successurl", "success_url", "cancelurl",
+    "cancel_url", "failurl", "fail_url", "errorurl", "error_url",
+    "forwardurl", "forward_url", "continue", "goto",
+    # media / content fetchers (avatar services, RSS readers, scrapers)
+    "avatar", "logo", "icon", "photo", "thumb", "thumbnail", "cover",
+    "background", "feed", "rss", "sitemap", "import", "export",
+    # API / service integration (microservices, proxy patterns)
+    "service", "remote", "host", "server", "api", "apiurl", "api_url",
+    "base", "baseurl", "base_url", "origin", "domain", "location",
+    # document / file operations (upload, download, import flows)
+    "document", "report", "template", "resource", "ref", "reference",
+    "attachment", "download", "upload", "open", "read",
+}
 
 _HARDCODED_CLOUD = [
     ("http://169.254.169.254/latest/meta-data/", ["ami-id", "instance-id", "instance-type"], "AWS IMDS v1"),
@@ -51,23 +73,44 @@ CLOUD_PAYLOADS, INTERNAL_PAYLOADS, URL_PARAMS = _load_ssrf_data()
 
 SSRF_HEADERS = ["X-Forwarded-For", "X-Real-IP", "X-Originating-IP", "X-Remote-IP", "X-Client-IP", "True-Client-IP"]
 
+# Timing-based SSRF: unreachable private IPs — if the server fetches one, the
+# TCP connect attempt blocks until timeout (detectable as a response-time delta).
+_SSRF_TIMING_TARGETS = [
+    "http://10.255.255.1:7777/",    # RFC 1918, unlikely routable from any cloud host
+    "http://172.31.255.254:7777/",  # AWS VPC range edge
+]
+_SSRF_TIMING_DELAY = 3.0   # minimum delta (seconds) to confirm server-side fetching
+
 
 def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     findings = []
     parsed = urlparse(page.url)
     params = parse_qs(parsed.query)
 
-    # URL parameter injection
+    # URL parameter injection — by param NAME in known list
     for param_name in list(params.keys()):
         if param_name.lower() not in URL_PARAMS:
             continue
         _test_param(page.url, parsed, params, param_name, client, findings)
 
-    # Form-based SSRF
+    # URL parameter injection — by param VALUE (any name whose value looks like a URL).
+    # Framework-agnostic: catches custom param names not in the hardcoded list.
+    for param_name, values in params.items():
+        if param_name.lower() in URL_PARAMS:
+            continue  # already tested above
+        val = values[0] if values else ""
+        if val.startswith(("http://", "https://", "//")):
+            _test_param(page.url, parsed, params, param_name, client, findings)
+
+    # Form-based SSRF — by input NAME
     for form in page.forms:
         for inp in form["inputs"]:
             if inp["name"] and inp["name"].lower() in URL_PARAMS:
                 _test_form_param(form, inp["name"], client, findings)
+
+    # Form-based SSRF — JSON body (REST APIs and modern web apps).
+    # Many apps ignore URL-encoded bodies and only parse JSON — test both.
+    _test_json_body_ssrf(page, client, findings)
 
     # Header-based SSRF — run once per host, not per page
     parsed_host = urlparse(page.url)
@@ -75,6 +118,11 @@ def test(page: CrawlResult, client: httpx.Client, oob=None) -> List[Finding]:
     if host_key not in _header_probed_hosts:
         _header_probed_hosts.add(host_key)
         _test_header_ssrf(page.url, client, findings)
+
+    # Timing-based SSRF — works without OOB or cloud metadata in response.
+    # Injects unreachable private IP into URL-valued params; server-side fetch attempt
+    # delays the response by its HTTP client connect timeout (detectable as a delta).
+    _test_timing_ssrf(page, client, findings)
 
     # Blind SSRF via OOB canary (DNS/HTTP callback)
     if oob:
@@ -133,6 +181,36 @@ def _test_form_param(form, param_name, client, findings):
                 return
 
 
+def _test_json_body_ssrf(page: CrawlResult, client, findings) -> None:
+    """SSRF via JSON POST body — covers REST APIs and modern web apps.
+
+    Many frameworks ignore application/x-www-form-urlencoded and only parse JSON.
+    Test each POST form by sending JSON with SSRF payloads in every field.
+    """
+    for form in page.forms:
+        if form["method"].upper() != "POST":
+            continue
+        inputs = {i["name"]: i.get("value", "") for i in form["inputs"] if i["name"]}
+        if not inputs:
+            continue
+        for field_name in list(inputs.keys()):
+            for payload, signatures, label in CLOUD_PAYLOADS[:3]:
+                body = dict(inputs)
+                body[field_name] = payload
+                try:
+                    resp = client.post(
+                        form["action"], json=body,
+                        headers={"Content-Type": "application/json"}, timeout=8,
+                    )
+                except Exception:
+                    continue
+                if signatures:
+                    matched = next((s for s in signatures if s in resp.text), None)
+                    if matched:
+                        findings.append(_finding(form["action"], field_name, payload, label, matched))
+                        return
+
+
 def _test_header_ssrf(url, client, findings):
     # Fetch a baseline without any injected header so we can confirm the
     # cloud-metadata signatures aren't already present in the page naturally.
@@ -176,6 +254,133 @@ def _test_header_ssrf(url, client, findings):
                     confidence=1.0,
                 ))
                 return
+
+
+def _test_timing_ssrf(page: CrawlResult, client: httpx.Client, findings: List[Finding]) -> None:
+    """Timing-based SSRF: detects server-side URL fetching without OOB or response content.
+
+    Injects an unreachable private IP as the URL parameter value. If the server issues
+    an outbound request, the TCP connect attempt blocks until its timeout fires —
+    measured as a delta from a benign-value baseline. Double-confirm mirrors SQLi
+    time-based detection to keep false-positive rate low.
+    """
+    parsed = urlparse(page.url)
+    params = parse_qs(parsed.query)
+    if not params:
+        return
+
+    candidates = [
+        p for p in params
+        if p.lower() in URL_PARAMS or (
+            params[p] and params[p][0].startswith(("http://", "https://", "//"))
+        )
+    ]
+    if not candidates:
+        return
+
+    for param_name in candidates:
+        # Baseline: inject an obviously-invalid but non-routable hostname — server
+        # returns immediately (DNS NXDOMAIN or immediate connection refusal).
+        _base_params = dict(params)
+        _base_params[param_name] = ["http://kagesec.invalid/"]
+        _base_url = urlunparse(parsed._replace(query=urlencode(_base_params, doseq=True)))
+        t0 = time.time()
+        try:
+            client.get(_base_url, timeout=14)
+        except Exception:
+            pass
+        baseline_time = time.time() - t0
+
+        for target in _SSRF_TIMING_TARGETS:
+            probe_times = []
+            for _ in range(2):
+                new_params = dict(params)
+                new_params[param_name] = [target]
+                test_url = urlunparse(parsed._replace(query=urlencode(new_params, doseq=True)))
+                t0 = time.time()
+                try:
+                    client.get(test_url, timeout=14)
+                    probe_times.append(max(time.time() - t0 - baseline_time, 0.0))
+                except Exception:
+                    probe_times.append(14.0)   # timeout itself confirms blocking
+
+            if len(probe_times) == 2 and all(t >= _SSRF_TIMING_DELAY for t in probe_times):
+                findings.append(_timing_finding(page.url, param_name, target, probe_times, baseline_time))
+                return
+
+    # POST form bodies — same delta pattern, covers webhook/callback/import fields
+    # that never appear in the URL query string.
+    for form in page.forms:
+        if form["method"].upper() != "POST":
+            continue
+        inputs = {i["name"]: i.get("value", "") for i in form["inputs"] if i["name"]}
+        if not inputs:
+            continue
+
+        form_candidates = [
+            name for name, val in inputs.items()
+            if name.lower() in URL_PARAMS or val.startswith(("http://", "https://", "//"))
+        ]
+        if not form_candidates:
+            continue
+
+        for field_name in form_candidates:
+            # Baseline: submit form with a non-routable NXDOMAIN value so the server
+            # returns immediately (DNS failure, no delay from outbound connection attempt).
+            baseline_data = dict(inputs)
+            baseline_data[field_name] = "http://kagesec.invalid/"
+            t0 = time.time()
+            try:
+                client.post(form["action"], data=baseline_data, timeout=14)
+            except Exception:
+                pass
+            baseline_time = time.time() - t0
+
+            for target in _SSRF_TIMING_TARGETS:
+                probe_times = []
+                for _ in range(2):
+                    probe_data = dict(inputs)
+                    probe_data[field_name] = target
+                    t0 = time.time()
+                    try:
+                        client.post(form["action"], data=probe_data, timeout=14)
+                        probe_times.append(max(time.time() - t0 - baseline_time, 0.0))
+                    except Exception:
+                        probe_times.append(14.0)
+
+                if len(probe_times) == 2 and all(t >= _SSRF_TIMING_DELAY for t in probe_times):
+                    findings.append(_timing_finding(form["action"], field_name, target, probe_times, baseline_time))
+                    return
+
+
+def _timing_finding(url: str, param: str, target: str, probe_times: list, baseline_time: float) -> Finding:
+    return Finding(
+        title="Server-Side Request Forgery (SSRF) — Timing-Based",
+        severity=Severity.HIGH,
+        url=url,
+        parameter=param,
+        payload=target,
+        evidence=(
+            f"Both probes delayed >{_SSRF_TIMING_DELAY}s "
+            f"({probe_times[0]:.1f}s, {probe_times[1]:.1f}s delta) "
+            f"vs {baseline_time:.2f}s baseline when injecting unreachable {target}"
+        ),
+        description=(
+            "The server appears to issue outbound HTTP requests based on the "
+            "URL-valued parameter or form field. Detected via response-time delta "
+            "against an unreachable private IP — characteristic of SSRF."
+        ),
+        remediation=(
+            "Validate and whitelist allowed URL destinations. "
+            "Block requests to RFC 1918 / link-local IP ranges at the egress firewall. "
+            "Use IMDSv2 on AWS (requires session token)."
+        ),
+        cwe="CWE-918",
+        cvss=7.5,
+        owasp_category="A10:2021 Server-Side Request Forgery",
+        standards=["ISO27001-8.23", "HIPAA-164.312a"],
+        confidence=0.85,
+    )
 
 
 def _finding(url, param, payload, label, matched):

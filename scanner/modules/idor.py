@@ -64,6 +64,15 @@ def _test_candidates(
         )
 
         if content_changed and test_resp.status_code == 200:
+            # Skip if the original resource is publicly accessible without session
+            # cookies — sequential IDs on public catalog/blog pages are not IDOR.
+            try:
+                anon = httpx.get(original_url, timeout=8, follow_redirects=True)
+                if anon.status_code == 200:
+                    break
+            except Exception:
+                pass
+
             findings.append(Finding(
                 title="Insecure Direct Object Reference (IDOR)" + (" — UUID" if is_uuid else ""),
                 severity=Severity.HIGH,

