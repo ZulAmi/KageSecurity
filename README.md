@@ -6,28 +6,67 @@ Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and th
 
 ## Real Benchmark
 
-Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app):
+Tested against [ginandjuice.shop](https://ginandjuice.shop) (PortSwigger's intentionally vulnerable app with [16 documented vulnerabilities](https://ginandjuice.shop/vulnerabilities)):
 
-| | Result |
-|---|---|
-| **Total scan time** | **10m 35s** |
-| Pages crawled | 30 |
-| Templates run | 146 (AI-selected from 10,406) |
-| **Active findings** | **21** |
-| **False positives** | **0** |
-| OS Command Injection | ✅ CRITICAL |
-| Client-Side Template Injection | ✅ CRITICAL |
-| XXE Injection | ✅ CRITICAL |
-| DOM-Based XSS | ✅ HIGH |
-| Reflected XSS | ✅ HIGH |
-| SSI Injection | ✅ HIGH |
-| CSRF | ✅ MEDIUM |
-| Business Logic flaws | ✅ MEDIUM |
-| Subdomain discovery | ✅ INFO |
+### Scan Stats
 
-KageSec crawls every page, runs 61 exploitation modules per page, and runs the template engine concurrently. AI narrows 10,000+ templates to the relevant subset for the detected stack — 146 in this run — then verifies every finding for exploitability and business impact. 3 findings were suppressed as false positives (HTTP 403 on `/admin`, HTTP 302 on `/logout`, missing Permissions-Policy), auditable in the `suppressed` array of the JSON report.
+| | KageSec | ZAP | Nuclei (standalone) |
+|---|---|---|---|
+| **Scan time** | **10m 22s** | ~25 min | 6m |
+| Pages crawled | 31 | — | 1 (root only) |
+| Templates / modules run | 61 modules + 10,905 templates | built-in | 6,344 templates |
+| **Total findings** | **21** | **7** | **12** |
+| Critical | 4 | 0 | 0 |
+| High | 4 | 4 | 0 |
+| Medium | 5 | 3 | 0 |
+| Low / Info | 8 | 0 | 12 |
+| AI verification | Skipped | N/A | N/A |
 
-Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
+ZAP results from [zaproxy.org/docs/testapps/ginnjuiceshop](https://www.zaproxy.org/docs/testapps/ginnjuiceshop/). Nuclei run: `nuclei -u https://ginandjuice.shop -tags web,xss,sqli,ssrf,xxe,injection,misconfig -severity info,low,medium,high,critical` v3.8.0, templates v10.4.4.
+
+### Vulnerability Coverage
+
+| Vulnerability | KageSec | ZAP | Nuclei |
+|---|---|---|---|
+| OS Command Injection | ✅ CRITICAL | ✗ | ✗ |
+| XML External Entity (XXE) | ✅ CRITICAL | ✗ | ✗ |
+| Client-Side Template Injection (AngularJS) | ✅ CRITICAL | ✗ | ✗ |
+| DOM-Based XSS | ✅ HIGH | ✅ HIGH | ✗ |
+| Reflected XSS | ✅ HIGH | ✅ HIGH | ✗ |
+| SSI Injection | ✅ HIGH | ✗ | ✗ |
+| SQL Injection | ✗ | ✅ HIGH | ✗ |
+| Vulnerable JS Library | ✗ | ✅ HIGH | ✗ |
+| Missing CSRF Protection | ✅ MEDIUM | ✅ MEDIUM | ✗ |
+| CRLF / Header Injection | ✗ | ✅ MEDIUM | ✗ |
+| Business Logic | ✅ MEDIUM | ✗ | ✗ |
+| Missing security headers | ✅ | ✅ | ✅ (all 12 findings) |
+
+Nuclei's 12 findings were all INFO — missing HTTP headers and cookie flags on the root URL. It does not crawl the app or inject attack payloads into parameters, so it found none of the actual vulnerabilities documented in the app. Nuclei is a fingerprinting and template-matching engine; active exploitation requires a DAST crawler driving it.
+
+### Authenticated Scan
+
+Running with a valid session (`--auth-cookie`) adds a finding category that unauthenticated scanners physically cannot produce:
+
+| | Unauthenticated | Authenticated (carlos / hunter2) |
+|---|---|---|
+| Total findings | 21 | 22 |
+| Critical | 4 | 4 |
+| High | 4 | **5** |
+| Medium | 5 | 5 |
+| New finding | — | ✅ **Authentication Bypass** (HIGH) |
+
+The new finding — _Authenticated Resource Accessible Without Auth_ — was only detectable because KageSec held a valid session and could compare authenticated vs unauthenticated access to the same endpoints. ZAP and Nuclei standalone produce no equivalent finding; they have no session to compare against.
+
+```bash
+kagesec scan https://target.example.com \
+  --auth-cookie "session=<your-token>" \
+  --login-logged-out "Log in|Session expired" \
+  --login-logged-in "My account|Log out"
+```
+
+_Both KageSec runs used `--no-browser` and skipped AI verification. With an AI provider configured, findings are verified for exploitability and false positives are filtered._
+
+KageSec crawls every page and runs 61 exploitation modules per page concurrently. Parameter discovery false positives — the classic DAST noise problem — are eliminated by a canary-based comparison baseline (the same approach used by Burp Param Miner and Arjun).
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
