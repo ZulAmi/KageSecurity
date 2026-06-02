@@ -453,8 +453,8 @@ def _test_url_params(page: CrawlResult, client: httpx.Client, findings: List[Fin
                         page.url, param_name, true_payload,
                         technique="Boolean-Based Blind (structural)",
                         evidence=(
-                            f"TRUE response body matches baseline mid-section; "
-                            f"FALSE diverges — fixed-scaffold page with injectable param"
+                            "TRUE response body matches baseline mid-section; "
+                            "FALSE diverges — fixed-scaffold page with injectable param"
                         ),
                     ))
                     break
@@ -734,8 +734,10 @@ def _test_json_body_sqli(page: CrawlResult, client: httpx.Client,
             for true_payload, false_payload in bool_pairs:
                 try:
                     body_base  = dict(inputs)
-                    body_true  = dict(inputs); body_true[field_name]  = true_payload
-                    body_false = dict(inputs); body_false[field_name] = false_payload
+                    body_true  = dict(inputs)
+                    body_true[field_name]  = true_payload
+                    body_false = dict(inputs)
+                    body_false[field_name] = false_payload
                     r_base  = client.post(form["action"], json=body_base,  timeout=10)
                     r_true  = client.post(form["action"], json=body_true,  timeout=10)
                     r_false = client.post(form["action"], json=body_false, timeout=10)
