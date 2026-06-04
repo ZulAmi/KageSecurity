@@ -750,7 +750,8 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     config.ai_model = ai_model
 
     # Live findings callback — prints each finding as it is discovered
-    _live = getattr(args, "live", False)
+    _is_tty = sys.stdout.isatty() and sys.stderr.isatty()
+    _live = getattr(args, "live", False) or _is_tty
     _no_color = getattr(args, "no_color", False) or not sys.stdout.isatty()
     _severity_colours = {
         "critical": "\033[91m", "high": "\033[91m",
@@ -817,7 +818,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     import datetime as _dt
     import threading as _threading
     _scan_start_wall = _dt.datetime.now()
-    _stats = getattr(args, "stats", False)
+    _stats = getattr(args, "stats", False) or _is_tty
 
     # Resource sampling for --stats (psutil optional — gracefully skipped if absent)
     _psutil_proc = None

@@ -91,7 +91,7 @@ func Run(cfg Config) error {
 				atomic.AddInt32(&totalFindings, 1)
 				cfg.Out.Finding(toOutputFinding(r))
 			}
-			if d%50 == 0 || d == total {
+			if d%5 == 0 || d == total {
 				cfg.Out.Progress(d, total, int(atomic.LoadInt32(&totalFindings)), "")
 			}
 		}
