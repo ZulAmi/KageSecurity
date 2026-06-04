@@ -8,10 +8,13 @@ login flows including TOTP 2FA.
 from __future__ import annotations
 
 import fnmatch
+import subprocess
+import sys
 from typing import List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, Request
+from playwright._impl._errors import Error as PlaywrightError
 
 from scanner.core.crawler import CrawlResult
 
@@ -45,6 +48,22 @@ class BrowserCrawler:
         crawler.close()
     """
 
+    def _launch_chromium(self) -> Browser:
+        try:
+            return self._pw.chromium.launch(headless=True)
+        except PlaywrightError as exc:
+            if "Executable doesn't exist" not in str(exc):
+                raise
+            print(
+                "[kagesec] Playwright browser binaries not found — installing now (one-time setup)...",
+                file=sys.stderr,
+            )
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+            )
+            return self._pw.chromium.launch(headless=True)
+
     def __init__(
         self,
         base_url: str,
@@ -62,7 +81,7 @@ class BrowserCrawler:
         self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
 
         self._pw = sync_playwright().start()
-        self._browser: Browser = self._pw.chromium.launch(headless=True)
+        self._browser: Browser = self._launch_chromium()
         ctx_kwargs: dict = {
             "ignore_https_errors": True,
             "user_agent": (
