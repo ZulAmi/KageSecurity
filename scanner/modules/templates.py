@@ -253,7 +253,7 @@ def _run_engine(
             # Suppress when --stats is on: stdout newlines corrupt the ANSI-positioned
             # progress bar on stderr. Non-stats scans continue to receive these lines.
             _quiet = getattr(config, "stats", False)
-            if total > 0 and done % 500 == 0 and not _quiet:
+            if total > 0 and (done % 5 == 0 or done == total) and not _quiet:
                 print(
                     f"[engine] {done}/{total} templates  |  {found} findings",
                     flush=True,
