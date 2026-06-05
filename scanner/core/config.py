@@ -71,3 +71,4 @@ class ScanConfig:
     nuclei_include_info: bool = False       # Include INFO-severity Nuclei findings (noisy OSINT templates — off by default)
     stats: bool = False                     # Mirror of --stats CLI flag; gates engine progress prints to avoid ANSI bar corruption
     concurrency: int = 8                    # Thread-pool workers; also used to scale Go engine goroutines and rate limit
+    crawl_workers: int = 3                  # Parallel browser contexts for BFS crawling

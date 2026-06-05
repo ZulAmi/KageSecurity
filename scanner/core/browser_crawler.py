@@ -4,13 +4,20 @@ Playwright-based headless browser crawler.
 Drop-in replacement for Crawler — identical interface but uses Chromium to execute
 JavaScript, capture network requests, handle SPA navigation, and support multi-step
 login flows including TOTP 2FA.
+
+Parallel BFS crawl: each worker thread creates its own sync_playwright() stack
+(required — Playwright's sync API ties greenlets to the creating thread). Auth cookies
+are shared by exporting storage_state() from the main context after login and importing
+them into each worker's context. This matches the architecture of commercial DAST tools.
 """
 from __future__ import annotations
 
 import fnmatch
+import queue
 import subprocess
 import sys
-from typing import List, Optional, Set, TYPE_CHECKING
+import threading
+from typing import List, Optional, Set, Tuple, TYPE_CHECKING
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, Request
@@ -48,9 +55,9 @@ class BrowserCrawler:
         crawler.close()
     """
 
-    def _launch_chromium(self) -> Browser:
+    def _launch_chromium(self, pw) -> Browser:
         try:
-            return self._pw.chromium.launch(headless=True)
+            return pw.chromium.launch(headless=True)
         except PlaywrightError as exc:
             if "Executable doesn't exist" not in str(exc):
                 raise
@@ -62,26 +69,10 @@ class BrowserCrawler:
                 [sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True,
             )
-            return self._pw.chromium.launch(headless=True)
+            return pw.chromium.launch(headless=True)
 
-    def __init__(
-        self,
-        base_url: str,
-        max_depth: int = 3,
-        max_pages: int = 100,
-        config: Optional["ScanConfig"] = None,
-    ):
-        self.base_url = base_url.rstrip("/")
-        self.max_depth = max_depth
-        self.max_pages = max_pages
-        self.config = config
-        self.visited: Set[str] = set()
-        self._network_requests: List[str] = []
-        self._include = list(config.include_patterns) if config and config.include_patterns else []
-        self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
-
-        self._pw = sync_playwright().start()
-        self._browser: Browser = self._launch_chromium()
+    def _make_context(self, browser: Browser) -> BrowserContext:
+        """Create one isolated BrowserContext with auth/proxy/headers applied."""
         ctx_kwargs: dict = {
             "ignore_https_errors": True,
             "user_agent": (
@@ -90,26 +81,55 @@ class BrowserCrawler:
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
         }
+        config = self.config
         if config and getattr(config, "proxy", None):
             ctx_kwargs["proxy"] = {"server": config.proxy}
-        self._context: BrowserContext = self._browser.new_context(**ctx_kwargs)
 
-        # Inject auth headers / cookies
+        ctx: BrowserContext = browser.new_context(**ctx_kwargs)
+
         if config and config.auth:
             auth = config.auth
             if auth.get("type") == "bearer":
-                self._context.set_extra_http_headers(
-                    {"Authorization": f"Bearer {auth['value']}"}
-                )
+                ctx.set_extra_http_headers({"Authorization": f"Bearer {auth['value']}"})
             elif auth.get("type") == "cookie" and auth.get("cookies"):
                 cookies = [
                     {"name": k, "value": v, "url": self.base_url}
                     for k, v in auth["cookies"].items()
                 ]
-                self._context.add_cookies(cookies)
+                ctx.add_cookies(cookies)
 
         if config and config.headers:
-            self._context.set_extra_http_headers(config.headers)
+            ctx.set_extra_http_headers(config.headers)
+
+        return ctx
+
+    def __init__(
+        self,
+        base_url: str,
+        max_depth: int = 3,
+        max_pages: int = 100,
+        config: Optional["ScanConfig"] = None,
+        crawl_workers: int = 3,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.max_depth = max_depth
+        self.max_pages = max_pages
+        self.config = config
+        self.visited: Set[str] = set()
+        self._visited_lock = threading.Lock()
+        self._crawl_workers = max(1, crawl_workers)
+        self._network_requests: List[str] = []
+        self._include = list(config.include_patterns) if config and config.include_patterns else []
+        self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
+
+        # Main-thread Playwright stack: used for _authenticate() and the _crawl_page() shim.
+        # Workers create their own stacks — Playwright's sync API ties greenlets to the
+        # creating thread, so contexts cannot be shared across threads.
+        self._pw = sync_playwright().start()
+        self._browser: Browser = self._launch_chromium(self._pw)
+        self._context: BrowserContext = self._make_context(self._browser)
+        # Backward-compat alias expected by engine.py re-auth path
+        self._contexts = [self._context]
 
     # ------------------------------------------------------------------
     # Public API
@@ -117,12 +137,83 @@ class BrowserCrawler:
 
     def crawl(self) -> List[CrawlResult]:
         results: List[CrawlResult] = []
+        results_lock = threading.Lock()
+        stop_event = threading.Event()
 
-        # Optionally authenticate before crawling
+        # Auth: run login on the main context, export cookies for worker contexts
+        auth_cookies: list = []
         if self.config and self.config.login_flow:
             self._authenticate(self.config.login_flow)
+            shared_state = self._context.storage_state()
+            auth_cookies = shared_state.get("cookies", [])
 
-        self._crawl_page(self.base_url, depth=0, results=results)
+        work_queue: queue.Queue = queue.Queue()
+        work_queue.put((self.base_url, 0))
+
+        def _worker() -> None:
+            # Each worker owns its own Playwright/browser/context — required because
+            # Playwright's sync API uses greenlets that cannot switch across threads.
+            from playwright.sync_api import sync_playwright as _sync_pw
+            pw = _sync_pw().start()
+            try:
+                browser = pw.chromium.launch(headless=True)
+                ctx = self._make_context(browser)
+                if auth_cookies:
+                    ctx.add_cookies(auth_cookies)
+                try:
+                    while not stop_event.is_set():
+                        try:
+                            url, depth = work_queue.get(timeout=0.5)
+                        except queue.Empty:
+                            continue
+
+                        try:
+                            if depth > self.max_depth:
+                                continue
+
+                            with self._visited_lock:
+                                norm = _normalise_for_dedup(url)
+                                if norm in self.visited:
+                                    continue
+                                self.visited.add(norm)
+
+                            with results_lock:
+                                if len(results) >= self.max_pages:
+                                    continue
+
+                            result, discovered = self._fetch_page(url, depth, ctx)
+
+                            if result is not None:
+                                with results_lock:
+                                    if len(results) < self.max_pages:
+                                        results.append(result)
+
+                            for child_url, child_depth in discovered:
+                                with self._visited_lock:
+                                    if _normalise_for_dedup(child_url) not in self.visited:
+                                        work_queue.put((child_url, child_depth))
+
+                        finally:
+                            work_queue.task_done()
+                finally:
+                    ctx.close()
+                    browser.close()
+            finally:
+                pw.stop()
+
+        threads = [
+            threading.Thread(target=_worker, daemon=True, name=f"crawler-{i}")
+            for i in range(self._crawl_workers)
+        ]
+        for t in threads:
+            t.start()
+
+        work_queue.join()
+        stop_event.set()
+
+        for t in threads:
+            t.join(timeout=10.0)
+
         return results
 
     def close(self):
@@ -147,11 +238,9 @@ class BrowserCrawler:
             page.fill(flow.password_selector, flow.password)
             page.click(flow.submit_selector)
 
-            # Handle TOTP 2FA if a secret is provided
             if flow.totp_secret:
                 import pyotp
                 totp_code = pyotp.TOTP(flow.totp_secret).now()
-                # Common TOTP input selectors — try a few
                 for selector in [
                     'input[type="text"][name*="otp"]',
                     'input[type="text"][name*="token"]',
@@ -165,28 +254,32 @@ class BrowserCrawler:
                     except Exception:
                         continue
 
-            # Wait for success_indicator (URL substring or CSS selector)
             try:
                 page.wait_for_url(f"**{flow.success_indicator}**", timeout=10_000)
             except Exception:
                 try:
                     page.wait_for_selector(flow.success_indicator, timeout=10_000)
                 except Exception:
-                    pass  # proceed anyway — session cookies are captured regardless
+                    pass
 
         finally:
             page.close()
 
-    def _crawl_page(self, url: str, depth: int, results: List[CrawlResult]):
-        if depth > self.max_depth or len(results) >= self.max_pages:
-            return
+    def _fetch_page(
+        self,
+        url: str,
+        depth: int,
+        ctx: BrowserContext,
+    ) -> Tuple[Optional[CrawlResult], List[Tuple[str, int]]]:
+        """
+        Fetch a single URL within the given context.
 
-        dedup_key = _normalise_for_dedup(url)
-        if dedup_key in self.visited:
-            return
-        self.visited.add(dedup_key)
-
-        page = self._context.new_page()
+        Creates and closes its own Page per call. Returns (CrawlResult | None,
+        list of (child_url, child_depth) to enqueue). Dedup and max_pages
+        enforcement is the caller's responsibility.
+        """
+        discovered: List[Tuple[str, int]] = []
+        page = ctx.new_page()
         network_reqs: List[str] = []
         spa_routes: List[str] = []
         ws_connections: List[dict] = []
@@ -197,8 +290,10 @@ class BrowserCrawler:
 
         def _on_websocket(ws):
             ws_info: dict = {"url": ws.url, "messages_sent": [], "messages_received": []}
-            ws.on("framesent", lambda data: ws_info["messages_sent"].append(data.body if hasattr(data, "body") else str(data)))
-            ws.on("framereceived", lambda data: ws_info["messages_received"].append(data.body if hasattr(data, "body") else str(data)))
+            ws.on("framesent", lambda data: ws_info["messages_sent"].append(
+                data.body if hasattr(data, "body") else str(data)))
+            ws.on("framereceived", lambda data: ws_info["messages_received"].append(
+                data.body if hasattr(data, "body") else str(data)))
             ws_connections.append(ws_info)
 
         page.on("request", _on_request)
@@ -206,25 +301,24 @@ class BrowserCrawler:
 
         try:
             timeout_ms = (self.config.timeout if self.config else 10) * 1_000
-            resp = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            resp = page.goto(url, wait_until="load", timeout=timeout_ms)
             if resp is None:
-                return
+                return None, discovered
 
-            # Wait for client-side auth guards to redirect and settle
             try:
-                page.wait_for_load_state("networkidle", timeout=5_000)
+                page.wait_for_load_state("domcontentloaded", timeout=3_000)
             except Exception:
                 pass
 
             status = resp.status
-            final_url = page.url  # may differ from `url` after client-side redirects
+            final_url = page.url
             headers = dict(resp.headers)
             content_type = headers.get("content-type", "")
 
             if "html" not in content_type and "json" not in content_type:
-                return
+                return None, discovered
 
-            # Intercept React Router / history.pushState route changes
+            # Hook React Router / history.pushState to capture SPA route changes
             page.evaluate("""
                 () => {
                     if (!window.__kagesec_routes) window.__kagesec_routes = [];
@@ -241,16 +335,15 @@ class BrowserCrawler:
                 }
             """)
 
-            # Scroll to trigger infinite scroll / lazy-loaded content (up to 3 passes)
             self._scroll_to_load(page)
 
             body = page.content()
-            screenshot = page.screenshot(type="png")
+            _want_screenshots = self.config and getattr(self.config, "screenshots", False)
+            screenshot = page.screenshot(type="png") if _want_screenshots else b""
 
             forms = self._extract_forms(page, final_url)
             links = self._extract_links(page, final_url)
 
-            # Collect SPA routes discovered via pushState during scroll/interaction
             try:
                 pushed = page.evaluate("() => window.__kagesec_routes || []")
                 for route in pushed:
@@ -258,7 +351,6 @@ class BrowserCrawler:
                     if (
                         _is_navigable(resolved)
                         and _same_origin(resolved, self.base_url)
-                        and _normalise_for_dedup(resolved) not in self.visited
                         and self._in_scope(resolved)
                     ):
                         spa_routes.append(resolved)
@@ -276,21 +368,31 @@ class BrowserCrawler:
                 network_requests=list(network_reqs),
                 websocket_connections=list(ws_connections),
             )
-            results.append(result)
 
             all_links = list(dict.fromkeys(links + spa_routes))
             for link in all_links:
-                self._crawl_page(link, depth + 1, results)
+                discovered.append((link, depth + 1))
 
             for api_url in network_reqs:
-                norm = _normalise_for_dedup(api_url)
-                if norm not in self.visited and len(results) < self.max_pages:
-                    self._crawl_page(api_url, depth + 1, results)
+                discovered.append((api_url, depth + 1))
+
+            return result, discovered
 
         except Exception:
-            pass
+            return None, discovered
         finally:
             page.close()
+
+    def _crawl_page(self, url: str, depth: int, results: List[CrawlResult]) -> None:
+        """Backward-compat shim used by engine.py re-auth path — fetches one URL."""
+        with self._visited_lock:
+            norm = _normalise_for_dedup(url)
+            if norm in self.visited:
+                return
+            self.visited.add(norm)
+        result, _ = self._fetch_page(url, depth, self._context)
+        if result is not None:
+            results.append(result)
 
     def _scroll_to_load(self, page: Page, passes: int = 3) -> None:
         """Scroll to bottom repeatedly to trigger infinite scroll / lazy content."""
@@ -299,7 +401,7 @@ class BrowserCrawler:
                 prev_height = page.evaluate("() => document.body.scrollHeight")
                 page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
                 try:
-                    page.wait_for_load_state("networkidle", timeout=3_000)
+                    page.wait_for_load_state("load", timeout=1_500)
                 except Exception:
                     pass
                 new_height = page.evaluate("() => document.body.scrollHeight")
@@ -327,7 +429,6 @@ class BrowserCrawler:
                     if (
                         _is_navigable(resolved)
                         and _same_origin(resolved, self.base_url)
-                        and _normalise_for_dedup(resolved) not in self.visited
                         and self._in_scope(resolved)
                     ):
                         links.append(resolved)
