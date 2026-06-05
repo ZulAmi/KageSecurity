@@ -251,7 +251,13 @@ def run_scan(
     # Crawler selection
     if getattr(config, "browser", False):
         BrowserCrawler = _get_browser_crawler()
-        crawler = BrowserCrawler(config.target, max_depth=config.max_depth, max_pages=config.max_pages, config=config)
+        crawler = BrowserCrawler(
+            config.target,
+            max_depth=config.max_depth,
+            max_pages=config.max_pages,
+            config=config,
+            crawl_workers=getattr(config, "crawl_workers", 3),
+        )
     else:
         crawler = Crawler(config.target, max_depth=config.max_depth, max_pages=config.max_pages, config=config)
 
