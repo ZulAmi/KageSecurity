@@ -633,7 +633,13 @@ def _run_multi_target(targets: list[str], args) -> None:
     with ThreadPoolExecutor(max_workers=parallel) as ex:
         futs = {ex.submit(_scan_one, i, t): t for i, t in enumerate(targets, 1)}
         for fut in as_completed(futs):
-            if fut.result():
+            target = futs[fut]
+            try:
+                if fut.result():
+                    any_fail = True
+            except Exception as exc:
+                with _print_lock:
+                    print(f"[!] {target}: scan failed — {exc}", file=sys.stderr)
                 any_fail = True
 
     if any_fail:
