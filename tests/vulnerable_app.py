@@ -36,7 +36,7 @@ def index():
 def search():
     # Vulnerable: reflects query param directly into HTML
     q = request.args.get("q", "")
-    return f"""
+    return f"""  # lgtm[py/reflected-xss]
     <html><body>
     <form method="get" action="/search">
       <input name="q" value="{q}" />
@@ -53,11 +53,11 @@ def user():
     user_id = request.args.get("id", "1")
     try:
         db = get_db()
-        row = db.execute(f"SELECT * FROM users WHERE id = {user_id}").fetchone()
+        row = db.execute(f"SELECT * FROM users WHERE id = {user_id}").fetchone()  # lgtm[py/sql-injection]
         result = str(row) if row else "Not found"
     except Exception as e:
-        result = f"Database error: {e}"
-    return f"""
+        result = f"Database error: {e}"  # lgtm[py/stack-trace-exposure]
+    return f"""  # lgtm[py/reflected-xss]
     <html><body>
     <form method="get" action="/user">
       <input name="id" value="{user_id}" />
@@ -72,7 +72,7 @@ def user():
 def redir():
     # Vulnerable: redirects to any URL in ?next=
     next_url = request.args.get("next", "/")
-    return redirect(next_url)
+    return redirect(next_url)  # lgtm[py/url-redirection]
 
 
 @app.route("/fetch")
@@ -82,13 +82,13 @@ def fetch():
     if url:
         try:
             import httpx
-            resp = httpx.get(url, timeout=3)
+            resp = httpx.get(url, timeout=3)  # lgtm[py/full-ssrf]
             body = resp.text[:500]
         except Exception as e:
-            body = f"Error: {e}"
+            body = f"Error: {e}"  # lgtm[py/stack-trace-exposure]
     else:
         body = ""
-    return f"""
+    return f"""  # lgtm[py/reflected-xss]
     <html><body>
     <form method="get" action="/fetch">
       <input name="url" value="{url}" />
