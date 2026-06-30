@@ -12,6 +12,7 @@ back into the scan engine's page queue and tested by all modules.
 """
 import re
 import httpx
+from bs4 import BeautifulSoup
 from typing import List, Optional
 from urllib.parse import urlparse, urljoin
 
@@ -122,11 +123,13 @@ def crawl_js_endpoints(
 
 
 def _extract_inline_scripts(html: str) -> List[str]:
+    soup = BeautifulSoup(html, "html.parser")
     scripts = []
-    for m in re.finditer(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE):
-        content = m.group(1).strip()
-        if content:
-            scripts.append(content)
+    for tag in soup.find_all("script"):
+        if not tag.get("src"):
+            content = tag.get_text().strip()
+            if content:
+                scripts.append(content)
     return scripts
 
 

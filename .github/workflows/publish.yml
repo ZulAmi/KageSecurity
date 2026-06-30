@@ -82,6 +82,8 @@ jobs:
   build-wheel:
     name: Build wheel (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:

@@ -64,6 +64,7 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     # Inspect TLS certificate
     try:
         ctx = ssl.create_default_context()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((hostname, port), timeout=5) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 cert = ssock.getpeercert()
