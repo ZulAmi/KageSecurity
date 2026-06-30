@@ -1,8 +1,9 @@
+import shlex
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 
 class Severity(str, Enum):
@@ -45,23 +46,21 @@ class Finding:
     poc_curl: Optional[str] = None         # Gap 19 — ready-to-run curl command to reproduce
 
     def build_poc_curl(self, method: str = "GET", extra_headers: Optional[Dict] = None) -> str:
-        """Gap 19 — generate a curl command reproducing this finding."""
-        parts = [f"curl -sk -X {method.upper()}"]
+        """Generate a reproducible curl command for this finding."""
+        args: List[str] = ["curl", "-sk", "-X", method.upper()]
         if extra_headers:
             for k, v in extra_headers.items():
-                parts.append(f"-H '{k}: {v}'")
-        if self.payload and method.upper() in ("POST", "PUT", "PATCH"):
-            parts.append(f"--data '{self.payload}'")
+                args += ["-H", f"{k}: {v}"]
         url = self.url
         if self.parameter and self.payload and method.upper() == "GET":
-            from urllib.parse import urlparse, urlunparse, parse_qs
             parsed = urlparse(url)
             qs = parse_qs(parsed.query)
             qs[self.parameter] = [self.payload]
-            from urllib.parse import urlencode as _enc
-            url = urlunparse(parsed._replace(query=_enc(qs, doseq=True)))
-        parts.append(f"'{url}'")
-        cmd = " ".join(parts)
+            url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+        elif self.payload and method.upper() in ("POST", "PUT", "PATCH"):
+            args += ["--data", self.payload]
+        args.append(url)
+        cmd = " ".join(shlex.quote(a) for a in args)
         self.poc_curl = cmd
         return cmd
 
@@ -142,9 +141,15 @@ class ScanResult:
         with self._dedup_lock:
             existing = self._dedup_map.get(key)
             if existing is not None:
-                # Upgrade to higher severity if a better signal arrives later
+                # Upgrade to higher severity if a better signal arrives later.
+                # Update both the map AND the list so they stay consistent without
+                # requiring callers to call deduplicate() after every add.
                 if _SEVERITY_RANK[finding.severity] < _SEVERITY_RANK[existing.severity]:
                     self._dedup_map[key] = finding
+                    try:
+                        self.findings[self.findings.index(existing)] = finding
+                    except ValueError:
+                        pass
                 return False
             self._dedup_map[key] = finding
             self.findings.append(finding)

@@ -1,0 +1,4 @@
+paths-ignore:
+  # Deliberately vulnerable Flask app used as a scan target for integration tests.
+  # It is never deployed and contains intentional vulnerabilities by design.
+  - 'tests/vulnerable_app.py'

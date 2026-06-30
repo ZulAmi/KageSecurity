@@ -152,7 +152,7 @@ def _make_finding(url: str, data: dict, evidence: str, severity: Severity, confi
         cwe="CWE-362",
         cvss=7.5 if severity == Severity.HIGH else 5.9,
         confidence=confidence,
-        standards={"OWASP": "A04:2021", "CWE": "CWE-362"},
+        standards=["OWASP-A04:2021", "CWE-362"],
     )
 
 

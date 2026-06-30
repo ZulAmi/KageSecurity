@@ -106,5 +106,5 @@ def test(page: CrawlResult, client) -> List[Finding]:
         cwe="CWE-311",
         cvss=5.9,
         confidence=confidence,
-        standards={"OWASP": "A02:2021", "CWE": "CWE-311", "CVE": "CVE-2013-3587"},
+        standards=["OWASP-A02:2021", "CWE-311", "CVE-2013-3587"],
     )]

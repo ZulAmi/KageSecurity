@@ -332,8 +332,13 @@ def run_template(template: Template, page_url: str, client) -> list[Finding]:
             for r in flow_results:
                 if r.get("status") and r["status"] < 400:
                     findings.append(_make_finding(template, r["url"], r["status"], r.get("body", "")))
-        except Exception:
-            pass
+        except ImportError:
+            pass  # flow_evaluator optional dependency
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug(
+                "Flow evaluation failed for template %s: %s", getattr(template, "id", "?"), exc
+            )
         return findings
 
     # Gap 26 — per-template rate limit: sleep between requests

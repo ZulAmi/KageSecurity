@@ -705,10 +705,15 @@ def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
     url    = getattr(page, "url", "")
     body   = getattr(page, "body", "") or ""
 
+    # Compare URL paths rather than using substring match — avoids false positives when
+    # the login path (/login) is a substring of unrelated paths (/api/login, /users/login).
+    _login_path = urlparse(login_flow.url).path.rstrip("/")
+    _page_path  = urlparse(url).path.rstrip("/")
+
     is_expired = (
         status == 401
-        or (status in (301, 302, 303) and login_flow.url in url)
-        or (status == 200 and login_flow.url in url)
+        or (status in (301, 302, 303) and _page_path == _login_path)
+        or (status == 200 and _page_path == _login_path)
     )
 
     # Regex-based session verification — StackHawk / ZAP "Check every Response" strategy
@@ -730,9 +735,10 @@ def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
     except Exception:
         pass
 
-    # Fallback: re-fetch OAuth2 token if auth type is bearer
+    # Fallback: re-fetch OAuth2 token via client_credentials if configured.
+    # token_url lives in config.auth (set by --auth-oauth2-token-url CLI flag).
     if config.auth and config.auth.get("type") == "bearer":
-        token_url = getattr(config, "_oauth2_token_url", None)
+        token_url = config.auth.get("token_url")
         if token_url:
             try:
                 import httpx as _httpx
@@ -741,12 +747,14 @@ def _reauth_if_needed(page, config, crawler, raw_client) -> bool:
                     "client_id": config.auth.get("client_id", ""),
                     "client_secret": config.auth.get("client_secret", ""),
                 }, timeout=15)
+                resp.raise_for_status()
                 new_token = resp.json().get("access_token")
                 if new_token:
                     raw_client.headers["Authorization"] = f"Bearer {new_token}"
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).debug("OAuth2 token refresh failed: %s", exc)
 
     return False
 
