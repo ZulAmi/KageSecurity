@@ -26,16 +26,14 @@ class TestRunMultiTargetParallel:
             return return_values.get(target, 0)
         return _fake
 
-    def test_all_success_exits_zero(self, monkeypatch, capsys):
+    def test_all_success_exits_zero(self, monkeypatch):
         import cli.main as cli
 
         returns = {"http://a.com": 0, "http://b.com": 0}
         monkeypatch.setattr(cli, "_run_single_target", self._patch_run_single(returns))
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli._run_multi_target(["http://a.com", "http://b.com"], _make_args())
-        # sys.exit only called on failure — if no exception raised, success
-        pytest.skip("no sys.exit on success — reached here normally")
+        # All targets succeed — function must return normally, no SystemExit raised.
+        cli._run_multi_target(["http://a.com", "http://b.com"], _make_args())
 
     def test_one_failure_exits_one(self, monkeypatch):
         import cli.main as cli
