@@ -22,6 +22,7 @@ from scanner.ai.reporter import generate_report
 import scanner.modules as _modules_pkg
 from scanner import __version__
 from scanner.core.scan_result import Finding
+from scanner.utils.http import pin_cookies
 from scanner.utils.safe_paths import validate_scan_id
 
 # Checkpoints hold findings (payloads, evidence, sometimes tokens), so they live in a
@@ -364,6 +365,9 @@ def run_scan(
         ),
         **({"proxy": proxy} if proxy else {}),
     )
+    # Session cookies the user supplied must survive fuzzing that makes the server
+    # issue new ones (see pin_cookies).
+    pin_cookies(raw_client, base_cookies.keys())
 
     # Random User-Agent rotation: wrap the client to rotate UA per request
     if getattr(config, "random_agent", False):

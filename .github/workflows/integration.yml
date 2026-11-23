@@ -44,34 +44,6 @@ jobs:
             echo "::error::$url did not become ready"; exit 1
           done
 
-      - name: Debug DVWA SQLi (temporary)
-        run: |
-          python - <<'PYEOF'
-          import re, sys, httpx
-          sys.path.insert(0, "tests/integration")
-          from test_dvwa import _dvwa_session, DVWA_URL
-          from scanner.core.config import ScanConfig
-          from scanner.core.crawler import Crawler
-          from scanner.modules import sqli
-          sid = _dvwa_session()
-          cookies = {"PHPSESSID": sid, "security": "low"}
-          c = httpx.Client(follow_redirects=True, headers={"Cookie": f"PHPSESSID={sid}; security=low"})
-          url = DVWA_URL + "/vulnerabilities/sqli/"
-          for p in ["1", "1'", "1' OR '1'='1"]:
-              r = c.get(url, params={"id": p, "Submit": "Submit"})
-              pre = [re.sub(r"<[^>]+>", " ", x)[:120] for x in re.findall(r"<pre>(.*?)</pre>", r.text, re.S)]
-              print("PROBE", repr(p), r.status_code, len(r.text), pre[:3], r.text[:150].replace("\n", " ") if r.status_code >= 500 else "")
-          cfg = ScanConfig(target=DVWA_URL, max_depth=1, exclude_patterns=["*logout*", "*setup.php*", "*security.php*"],
-                           auth={"type": "cookie", "cookies": cookies})
-          crawler = Crawler(DVWA_URL, max_depth=1, config=cfg)
-          pages = []
-          crawler._crawl_page(url, depth=1, results=pages)
-          page = pages[0]
-          print("PAGE", page.url, page.status_code, "forms:", page.forms)
-          found = sqli.test(page, c, config=cfg)
-          print("FINDINGS", [(f.title, f.url, f.parameter) for f in found])
-          PYEOF
-
       - name: Run integration tests
         run: pytest tests/integration/ -v --tb=short -p no:cacheprovider
 

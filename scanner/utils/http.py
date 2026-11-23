@@ -19,6 +19,32 @@ _SPA_MARKERS = [
 _SPA_CT_RE = re.compile(r"\btext/html\b", re.IGNORECASE)
 
 
+def pin_cookies(client: httpx.Client, names) -> None:
+    """Keep user-supplied cookies authoritative for the whole scan.
+
+    httpx stores every Set-Cookie in the client's shared jar. When a fuzzing request
+    makes the server issue a fresh cookie (an invalid session id → new anonymous
+    session, a different security level, ...), later requests would send *both*
+    values, and which one the server honours is framework-specific — so an
+    authenticated scan can silently degrade into an anonymous one halfway through.
+
+    After every response, drop server-set cookies whose names match the supplied
+    ones. User-supplied cookies are stored without a domain, server-set ones always
+    have one, which is how the two are told apart.
+    """
+    pinned = {n for n in names if n}
+    if not pinned:
+        return
+
+    def _drop_server_copies(response: httpx.Response) -> None:
+        jar = client.cookies.jar
+        for cookie in list(jar):
+            if cookie.name in pinned and cookie.domain:
+                jar.clear(cookie.domain, cookie.path, cookie.name)
+
+    client.event_hooks["response"].append(_drop_server_copies)
+
+
 def inject_url_param(url: str, param: str, value: str) -> str:
     parsed = urlparse(url)
     params = parse_qs(parsed.query, keep_blank_values=True)

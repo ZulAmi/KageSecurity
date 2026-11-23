@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Set, List, Optional, TYPE_CHECKING
 
 from scanner import __version__
+from scanner.utils.http import pin_cookies
 
 if TYPE_CHECKING:
     from scanner.core.config import ScanConfig
@@ -71,6 +72,7 @@ class Crawler:
             transport=httpx.HTTPTransport(retries=_retries),
             **({"proxy": _proxy} if _proxy else {}),
         )
+        pin_cookies(self.client, cookies.keys())
 
         if config and getattr(config, "follow_robots", False):
             self._parse_robots()
