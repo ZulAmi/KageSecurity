@@ -79,3 +79,6 @@ class ScanConfig:
     # code:/flow:/javascript: templates execute on the scanner host. Off by default,
     # mirroring Nuclei's -code flag.
     allow_code_templates: bool = False
+    # Delta mode: skip pages whose content hash is unchanged since the last scan.
+    # Opt-in because skipped pages produce no findings that run.
+    delta_scan: bool = False

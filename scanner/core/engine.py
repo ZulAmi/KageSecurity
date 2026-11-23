@@ -19,10 +19,15 @@ from scanner.compliance.mapper import map_to_standards
 from scanner.ai.verifier import verify_findings
 from scanner.ai.reporter import generate_report
 
-import tempfile
 import scanner.modules as _modules_pkg
+from scanner import __version__
+from scanner.core.scan_result import Finding
+from scanner.utils.safe_paths import validate_scan_id
 
-_CHECKPOINT_DIR = tempfile.gettempdir()
+# Checkpoints hold findings (payloads, evidence, sometimes tokens), so they live in a
+# private per-user directory rather than the shared system temp dir.
+_CHECKPOINT_DIR = os.path.expanduser("~/.kagesec/checkpoints")
+_CHECKPOINT_INTERVAL_SECONDS = 5.0
 
 # ---------------------------------------------------------------------------
 # Speed: URL normalisation and content deduplication
@@ -95,6 +100,11 @@ def _get_browser_crawler():
     return BrowserCrawler
 
 
+# Modules that failed to import: {module_name: error}. Reported in every scan's
+# errors so a broken module is visible instead of silently disappearing.
+MODULE_IMPORT_ERRORS: dict[str, str] = {}
+
+
 def _discover_modules():
     modules = []
     for _, name, _ in pkgutil.iter_modules(_modules_pkg.__path__):
@@ -102,12 +112,28 @@ def _discover_modules():
             mod = importlib.import_module(f"scanner.modules.{name}")
             if hasattr(mod, "test"):
                 modules.append(mod)
-        except Exception:
-            pass
+        except Exception as e:
+            MODULE_IMPORT_ERRORS[name] = f"{type(e).__name__}: {e}"
     return modules
 
 
 ALL_MODULES = _discover_modules()
+
+# Hard ceiling on request rate, whatever the user asks for.
+MAX_RPS = 300
+
+
+def auto_rate_limit(concurrency: int) -> int:
+    """Default RPS when the user has not chosen one: ~3 RPS of headroom per worker."""
+    return min(max(10, concurrency * 3), MAX_RPS)
+
+
+def playwright_available() -> bool:
+    try:
+        import playwright.sync_api  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def _load_plugins() -> list:
@@ -203,23 +229,38 @@ def _load_cookie_jar(path: str) -> dict:
 
 # --- Checkpoint helpers ---
 
-def _checkpoint_path(scan_id: str) -> str:
+def checkpoint_path(scan_id: str) -> str:
+    """Location of the --resume checkpoint for *scan_id* (validated, private dir)."""
+    validate_scan_id(scan_id)
+    os.makedirs(_CHECKPOINT_DIR, mode=0o700, exist_ok=True)
     return os.path.join(_CHECKPOINT_DIR, f"kagesec_{scan_id}.json")
 
 
-def _load_checkpoint(scan_id: str) -> set[tuple[str, str]]:
+def _load_checkpoint(scan_id: str) -> tuple[set[tuple[str, str]], list[Finding]]:
+    """Return (completed (url, module) pairs, findings found before the interruption)."""
     try:
-        with open(_checkpoint_path(scan_id)) as f:
+        with open(checkpoint_path(scan_id)) as f:
             data = json.load(f)
-        return {(pair[0], pair[1]) for pair in data.get("completed", [])}
     except Exception:
-        return set()
+        return set(), []
+    completed = {(pair[0], pair[1]) for pair in data.get("completed", [])}
+    findings = []
+    for raw in data.get("findings", []):
+        try:
+            findings.append(Finding.from_dict(raw))
+        except Exception:
+            continue
+    return completed, findings
 
 
-def _save_checkpoint(scan_id: str, completed: set[tuple[str, str]]) -> None:
+def _save_checkpoint(scan_id: str, completed: set[tuple[str, str]], findings: list[Finding]) -> None:
     try:
-        with open(_checkpoint_path(scan_id), "w") as f:
-            json.dump({"completed": list(completed)}, f)
+        path = checkpoint_path(scan_id)
+        tmp = f"{path}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"completed": sorted(completed), "findings": [x.to_dict() for x in findings]}, f)
+        os.replace(tmp, path)
     except Exception:
         pass
 
@@ -244,11 +285,34 @@ def run_scan(
     # Resumability — load checkpoint if requested
     resume_id = getattr(config, "resume_scan_id", None)
     effective_id = resume_id or scan_id
-    completed_pairs: set[tuple[str, str]] = _load_checkpoint(resume_id) if resume_id else set()
+    completed_pairs: set[tuple[str, str]] = set()
+    resumed_findings: list[Finding] = []
+    if resume_id:
+        completed_pairs, resumed_findings = _load_checkpoint(resume_id)
 
     result = ScanResult(target=config.target)
+    for _f in resumed_findings:
+        result.add_finding(_f)
+    if resume_id:
+        print(f"[*] Resuming scan {resume_id}: {len(completed_pairs)} checks done, "
+              f"{len(resumed_findings)} finding(s) restored", flush=True)
+    for _mod_name, _err in sorted(MODULE_IMPORT_ERRORS.items()):
+        result.errors.append(f"[module-load] {_mod_name} failed to import and was skipped: {_err}")
 
     # Crawler selection
+    if getattr(config, "browser", False) and not playwright_available():
+        msg = (
+            "[browser] Playwright is not installed — falling back to the HTTP crawler. "
+            "Install it with: pip install \"kagesec[browser]\" && playwright install chromium"
+        )
+        print(f"[!] {msg}", flush=True)
+        result.errors.append(msg)
+        if getattr(config, "login_flow", None):
+            login_msg = "[auth] --login-* browser login requires Playwright; the scan will run unauthenticated."
+            print(f"[!] {login_msg}", flush=True)
+            result.errors.append(login_msg)
+        config.browser = False
+
     if getattr(config, "browser", False):
         BrowserCrawler = _get_browser_crawler()
         crawler = BrowserCrawler(
@@ -264,7 +328,7 @@ def run_scan(
     # HTTP client with auth headers
     _ua = (
         getattr(config, "user_agent", None)
-        or "KageSec/0.1 Security Scanner"
+        or f"KageSec/{__version__} Security Scanner"
     )
     headers = {"User-Agent": _ua}
     if config.headers:
@@ -298,18 +362,16 @@ def run_scan(
             max_keepalive_connections=max(10, concurrency),
             keepalive_expiry=30,
         ),
-        **({"proxies": {"all://": proxy}} if proxy else {}),
+        **({"proxy": proxy} if proxy else {}),
     )
 
     # Random User-Agent rotation: wrap the client to rotate UA per request
     if getattr(config, "random_agent", False):
         raw_client = _RandomAgentClient(raw_client)
-    # Auto-scale: when the user hasn't set --rate-limit explicitly (still at default 10),
-    # give each worker ~3 RPS of headroom. Explicit --rate-limit values are always honoured.
-    # Hard cap at 300 RPS to stay responsible on any target.
-    _cfg_rps = getattr(config, "rate_limit_rps", 10)
-    _effective_rps = min(_cfg_rps if _cfg_rps != 10 else max(10, concurrency * 3), 300)
-    limiter = RateLimiter(rps=_effective_rps)
+    # The configured rate is honoured exactly (hard-capped at MAX_RPS). The CLI picks
+    # auto_rate_limit(concurrency) when the user has not passed --rate-limit.
+    _cfg_rps = getattr(config, "rate_limit_rps", None) or auto_rate_limit(concurrency)
+    limiter = RateLimiter(rps=min(_cfg_rps, MAX_RPS))
     client = RateLimitedClient(raw_client, limiter)
 
     # Gap 23: load suppression rules once
@@ -369,6 +431,8 @@ def run_scan(
             pass
 
     start = time.time()
+    all_crawled_pages: list = []
+    skipped_urls: set[str] = set()
 
     try:
         har_file = getattr(config, "har_file", None)
@@ -380,6 +444,8 @@ def run_scan(
             print("[*] Crawling target...", flush=True)
             pages = crawler.crawl()
             print(f"[*] Crawl complete: {len(pages)} pages found", flush=True)
+            if getattr(config, "login_flow", None) and hasattr(crawler, "session_cookies"):
+                _copy_browser_session(crawler.session_cookies(), raw_client, result)
 
         # Append synthetic pages from OpenAPI/GraphQL specs
         if getattr(config, "openapi_spec", None):
@@ -407,14 +473,19 @@ def run_scan(
                 f"({before_dedup} → {len(pages)})"
             )
 
-        # Gap 28: incremental/delta scanning — skip unchanged pages
-        full_scan = getattr(config, "force_full_scan", False)
-        if not full_scan:
+        # Every page the crawl found — saved as delta state even when some are skipped.
+        all_crawled_pages = list(pages)
+
+        # Gap 28: incremental/delta scanning — opt-in (--delta). Skipped pages run no
+        # modules, so their earlier findings must not be reported as RESOLVED.
+        delta_mode = getattr(config, "delta_scan", False) and not getattr(config, "force_full_scan", False)
+        if delta_mode:
             try:
                 from scanner.core.crawl_state import load_state, filter_changed_pages
                 saved_state = load_state(config.target)
                 if saved_state:
                     changed_pages, skipped_pages = filter_changed_pages(pages, saved_state)
+                    skipped_urls.update(p.url for p in skipped_pages)
                     if skipped_pages:
                         result.errors.append(
                             f"[delta] Skipping {len(skipped_pages)} unchanged page(s) "
@@ -499,6 +570,7 @@ def run_scan(
                     futures[executor.submit(_run_module, _mod, _page, client, oob, config)] = (_mod, _page)
             _total_work = len(futures)
             _done = 0
+            _last_checkpoint = time.time()
             _budget_exceeded = False
             # If --max-time is set, cap the as_completed timeout to the
             # remaining wall-clock time so the scan actually stops on time.
@@ -518,7 +590,9 @@ def run_scan(
                             if result.add_finding(f) and finding_callback:
                                 finding_callback(f)
                         completed_pairs.add((page.url, module.__name__))
-                        _save_checkpoint(effective_id, completed_pairs)
+                        if time.time() - _last_checkpoint >= _CHECKPOINT_INTERVAL_SECONDS:
+                            _save_checkpoint(effective_id, completed_pairs, result.findings)
+                            _last_checkpoint = time.time()
                     except Exception as e:
                         result.errors.append(f"{module.__name__}: {e}")
                     finally:
@@ -567,6 +641,7 @@ def run_scan(
             # cancel_futures=True drops queued-but-not-started work;
             # wait=False avoids blocking on threads stuck in network I/O after timeout
             executor.shutdown(wait=not _timed_out, cancel_futures=_timed_out)
+            _save_checkpoint(effective_id, completed_pairs, result.findings)
 
         # Poll OOB for blind callbacks after all modules finish
         if oob:
@@ -654,19 +729,32 @@ def run_scan(
     # Gap 28: save crawl state for next delta scan
     try:
         from scanner.core.crawl_state import save_state
-        save_state(config.target, pages if 'pages' in dir() else [])
+        save_state(config.target, all_crawled_pages)
     except Exception:
         pass
 
     # Persist to findings DB and classify finding states (New/Repeated/Regressed/Resolved)
     try:
         from scanner.core.findings_db import record_scan, classify_scan
-        classify_scan(scan_id, result, config.target)   # populates result.scan_states + resolved_findings
+        classify_scan(scan_id, result, config.target, unscanned_urls=skipped_urls)
         record_scan(scan_id, result)
     except Exception:
         pass
 
     return result, report_md
+
+
+def _copy_browser_session(cookies: list, client, result) -> None:
+    """Copy cookies from the logged-in browser context into the module httpx client."""
+    copied = 0
+    for c in cookies:
+        try:
+            client.cookies.set(c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/"))
+            copied += 1
+        except Exception:
+            continue
+    if copied:
+        result.errors.append(f"[info] Reusing {copied} session cookie(s) from browser login for module requests")
 
 
 def _run_module(module, page, client, oob=None, config=None):
@@ -683,9 +771,12 @@ def _run_module(module, page, client, oob=None, config=None):
     if "config" in params:
         kwargs["config"] = config
 
-    if kwargs:
-        return module.test(page, client, **kwargs)
-    return module.test(page, client)
+    findings = module.test(page, client, **kwargs) if kwargs else module.test(page, client)
+    mod_name = module.__name__.split(".")[-1]
+    for f in findings or []:
+        if getattr(f, "module", None) is None:
+            f.module = mod_name
+    return findings or []
 
 
 def _reauth_if_needed(page, config, crawler, raw_client) -> bool:

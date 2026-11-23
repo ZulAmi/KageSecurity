@@ -420,10 +420,16 @@ def _build_auth_headers(config) -> dict[str, str]:
     if not config:
         return {}
     headers: dict[str, str] = {}
-    bearer = getattr(config, "auth_bearer", None)
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    extra = getattr(config, "extra_headers", None)
+    auth = getattr(config, "auth", None) or {}
+    auth_type, auth_value = auth.get("type"), auth.get("value")
+    if auth_type == "bearer" and auth_value:
+        headers["Authorization"] = f"Bearer {auth_value}"
+    elif auth_type == "basic" and auth_value:
+        headers["Authorization"] = f"Basic {auth_value}"
+    cookies = auth.get("cookies") or {}
+    if cookies:
+        headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    extra = getattr(config, "headers", None)
     if extra and isinstance(extra, dict):
         headers.update(extra)
     return headers

@@ -44,6 +44,25 @@ class Finding:
     ai_business_impact: Optional[str] = None
     ai_attack_scenario: Optional[str] = None
     poc_curl: Optional[str] = None         # Gap 19 — ready-to-run curl command to reproduce
+    module: Optional[str] = None           # Name of the scanner module that produced this finding
+
+    def to_dict(self) -> dict:
+        from dataclasses import asdict
+        d = asdict(self)
+        d["severity"] = self.severity.value
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Finding":
+        from dataclasses import fields
+        known = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in known}
+        kwargs["severity"] = Severity(str(kwargs.get("severity", "info")).lower())
+        for required in ("parameter", "payload"):
+            kwargs.setdefault(required, None)
+        for required in ("title", "url", "evidence", "description", "remediation"):
+            kwargs.setdefault(required, "")
+        return cls(**kwargs)
 
     def build_poc_curl(self, method: str = "GET", extra_headers: Optional[Dict] = None) -> str:
         """Generate a reproducible curl command for this finding."""
@@ -144,7 +163,11 @@ class ScanResult:
                 # Upgrade to higher severity if a better signal arrives later.
                 # Update both the map AND the list so they stay consistent without
                 # requiring callers to call deduplicate() after every add.
-                if _SEVERITY_RANK[finding.severity] < _SEVERITY_RANK[existing.severity]:
+                # At equal severity keep the smallest URL, so the representative
+                # (and therefore the cross-scan state key) does not depend on which
+                # thread happened to finish first.
+                new_rank, old_rank = _SEVERITY_RANK[finding.severity], _SEVERITY_RANK[existing.severity]
+                if new_rank < old_rank or (new_rank == old_rank and finding.url < existing.url):
                     self._dedup_map[key] = finding
                     try:
                         self.findings[self.findings.index(existing)] = finding

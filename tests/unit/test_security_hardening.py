@@ -355,7 +355,9 @@ class TestMcpServer:
 
         monkeypatch.setattr(cli, "_run_single_target", fake_single)
         monkeypatch.setattr(sys, "argv", ["kagesec", *cmd[cmd.index("scan"):]])
-        cli.main()
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 0
         assert seen == {"target": "https://e.com/path", "modules": ["xss", "sqli"], "report_dir": "/tmp/r"}
 
     def test_read_report_confined(self, mcp_mod, tmp_path):

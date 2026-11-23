@@ -4,13 +4,15 @@ SARIF 2.1.0 exporter for GitHub Code Scanning / VS Code SARIF Viewer.
 from __future__ import annotations
 
 import json
+
+from scanner import __version__
 from scanner.core.scan_result import ScanResult, Finding, Severity
 
 _SARIF_VERSION = "2.1.0"
 _SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 _TOOL_NAME = "KageSec"
-_TOOL_VERSION = "0.1.0"
-_TOOL_URI = "https://github.com/kagesec/kagesec"
+_TOOL_VERSION = __version__
+_TOOL_URI = "https://github.com/ZulAmi/KageSecurity"
 
 _SEVERITY_MAP: dict[Severity, str] = {
     Severity.CRITICAL: "error",
@@ -51,6 +53,12 @@ def generate_sarif(result: ScanResult, out_path: str = "kagesec_report.sarif") -
                     {
                         "executionSuccessful": True,
                         "commandLine": f"kagesec scan {result.target}",
+                        # Problems during the scan (module crashes, timeouts, skipped
+                        # pages) — surfaced so a quiet report is not mistaken for a clean one.
+                        "toolExecutionNotifications": [
+                            {"level": "warning", "message": {"text": str(e)[:1000]}}
+                            for e in result.errors
+                        ],
                     }
                 ],
                 "properties": {

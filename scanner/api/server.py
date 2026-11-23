@@ -293,6 +293,7 @@ def _run_scan_job(scan_id: str, cfg: dict) -> None:
                 "ai_verdict": f.ai_verdict,
                 "ai_analysis": f.ai_analysis,
                 "remediation": f.remediation,
+                "module": f.module,
             }
             for f in result_obj.findings
             if not f.false_positive_suppressed

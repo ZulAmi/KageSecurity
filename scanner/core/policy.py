@@ -62,12 +62,14 @@ def save(data: dict[str, Any]) -> None:
         yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=True)
 
 
-def apply_to_namespace(policy: dict[str, Any], args) -> None:
+def apply_to_namespace(policy: dict[str, Any], args, explicit: set[str] | None = None) -> None:
     """
-    For each key in *policy*, set it on *args* ONLY if the arg is still at its
-    default value (i.e. the user did not pass it explicitly on the CLI).
+    For each key in *policy*, set it on *args* unless the user passed that option
+    on the command line.
 
-    Mapping from YAML keys → argparse attribute names:
+    *explicit* is the set of argparse dests the user typed. When it is None (old
+    callers) we fall back to "only if still at the default value", which cannot
+    tell an explicit ``--depth 3`` from the default 3.
     """
     _MAP = {
         "depth":         ("depth",          3),
@@ -93,8 +95,11 @@ def apply_to_namespace(policy: dict[str, Any], args) -> None:
         if yaml_key not in policy:
             continue
         yaml_val = policy[yaml_key]
+        if explicit is not None:
+            if attr not in explicit:
+                setattr(args, attr, yaml_val)
+            continue
         current = getattr(args, attr, default)
-        # Apply only when still at default
         if current == default or current is None:
             setattr(args, attr, yaml_val)
 

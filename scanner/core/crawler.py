@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
 from typing import Set, List, Optional, TYPE_CHECKING
 
+from scanner import __version__
+
 if TYPE_CHECKING:
     from scanner.core.config import ScanConfig
 
@@ -40,7 +42,8 @@ class Crawler:
         self._include = list(config.include_patterns) if config and config.include_patterns else []
         self._exclude = list(config.exclude_patterns) if config and config.exclude_patterns else []
 
-        _ua = (getattr(config, "user_agent", None) or "KageSec/0.1 Security Scanner") if config else "KageSec/0.1 Security Scanner"
+        _default_ua = f"KageSec/{__version__} Security Scanner"
+        _ua = (getattr(config, "user_agent", None) or _default_ua) if config else _default_ua
         headers = {"User-Agent": _ua}
         cookies = {}
 
@@ -59,12 +62,14 @@ class Crawler:
 
         _timeout = (getattr(config, "timeout", 10) or 10) if config else 10
         _retries = getattr(config, "retries", 0) if config else 0
+        _proxy = getattr(config, "proxy", None) if config else None
         self.client = httpx.Client(
             follow_redirects=True,
             timeout=_timeout,
             headers=headers,
             cookies=cookies,
             transport=httpx.HTTPTransport(retries=_retries),
+            **({"proxy": _proxy} if _proxy else {}),
         )
 
         if config and getattr(config, "follow_robots", False):
@@ -83,6 +88,12 @@ class Crawler:
 
     def _crawl_page(self, url: str, depth: int, results: List[CrawlResult]):
         if depth > self.max_depth or len(self.visited) >= self.max_pages:
+            return
+        # Single scope gate for every URL source (links, sitemap, JS bundles, XHR):
+        # same host only, and --include/--exclude always apply (e.g. */logout*).
+        if url != self.base_url and (
+            urlparse(url).netloc != self.base_domain or not self._in_scope(url)
+        ):
             return
 
         dedup_key = _normalise_for_dedup(url)
