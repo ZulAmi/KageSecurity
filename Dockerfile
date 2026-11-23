@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- 1. Go template engine -----------------------------------------------------
-FROM golang:1.22-bookworm AS engine
+FROM golang:1.27-bookworm AS engine
 WORKDIR /src/engine
 COPY engine/go.mod engine/go.sum ./
 RUN go mod download
