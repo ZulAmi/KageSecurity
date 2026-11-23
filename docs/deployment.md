@@ -195,7 +195,7 @@ kagesec scan https://target.example.com --fail-on high
 | `OLLAMA_URL` | Optional | Local Ollama (default: `http://localhost:11434`) |
 | `NVD_API_KEY` | Optional | Faster CVE enrichment from NVD |
 
-KageSec scans without AI — all 61 modules still run, findings are full quality, but there's no exploitability scoring or narrative report.
+KageSec scans without AI — all 64 modules still run, findings are full quality, but there's no exploitability scoring or narrative report.
 
 ---
 

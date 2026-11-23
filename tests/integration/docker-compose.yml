@@ -36,11 +36,8 @@ services:
     image: bkimminich/juice-shop:latest
     ports:
       - "3000:3000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    # No healthcheck: the image is distroless (no curl/wget), so a curl-based check
+    # always reports "unhealthy". The integration workflow polls port 3000 instead.
 
   # WebGoat — OWASP Java vulnerable app
   webgoat:
