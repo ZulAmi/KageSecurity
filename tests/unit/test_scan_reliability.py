@@ -350,3 +350,15 @@ def test_sarif_reports_scan_errors_and_real_version(tmp_path):
     assert notes == [{"level": "warning", "message": {"text": "xss: TimeoutError"}}]
     rule_ids = {r["id"] for r in run["tool"]["driver"]["rules"]}
     assert {r["ruleId"] for r in run["results"]} <= rule_ids
+
+
+def test_auth_from_environment(monkeypatch):
+    from cli.main import _build_auth
+    args = Namespace(auth_bearer=None, auth_cookie=None, auth_oauth2_token_url=None)
+    monkeypatch.setenv("KAGESEC_AUTH_BEARER", "tok")
+    assert _build_auth(args) == {"type": "bearer", "value": "tok"}
+    monkeypatch.delenv("KAGESEC_AUTH_BEARER")
+    monkeypatch.setenv("KAGESEC_AUTH_COOKIE", "sid=abc")
+    assert _build_auth(args) == {"type": "cookie", "cookies": {"sid": "abc"}}
+    args.auth_bearer = "explicit"
+    assert _build_auth(args)["value"] == "explicit"

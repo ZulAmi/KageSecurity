@@ -1,3 +1,4 @@
+{{- $secret := include "kagesec.secretName" . -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -13,25 +14,32 @@ spec:
         {{- include "kagesec.labels" . | nindent 8 }}
     spec:
       restartPolicy: {{ .Values.job.restartPolicy }}
+      automountServiceAccountToken: false
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "kagesec.serviceAccountName" . }}
       {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: kagesec
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command:
-            - kagesec
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
             - scan
-            - {{ .Values.scan.target | quote }}
             - --depth
             - {{ .Values.scan.depth | quote }}
             - --max-pages
             - {{ .Values.scan.maxPages | quote }}
             - --output
             - {{ .Values.scan.output | quote }}
+            - --report-dir
+            - {{ .Values.reports.mountPath | quote }}
+            {{- with .Values.scan.failOn }}
             - --fail-on
-            - {{ .Values.scan.failOn | quote }}
+            - {{ . | quote }}
+            {{- end }}
             - --concurrency
             - {{ .Values.scan.concurrency | quote }}
             - --rate-limit
@@ -60,37 +68,50 @@ spec:
             - {{ . | quote }}
             {{- end }}
             {{- end }}
-            {{- if .Values.auth.bearer }}
-            - --auth-bearer
-            - {{ .Values.auth.bearer | quote }}
-            {{- end }}
-            {{- if .Values.auth.cookie }}
-            - --auth-cookie
-            - {{ .Values.auth.cookie | quote }}
-            {{- end }}
             {{- if .Values.proxy }}
             - --proxy
             - {{ .Values.proxy | quote }}
             {{- end }}
+            - --
+            - {{ .Values.scan.target | quote }}
           env:
-            {{- if .Values.anthropicApiKey }}
-            - name: ANTHROPIC_API_KEY
-              value: {{ .Values.anthropicApiKey | quote }}
+            - name: HOME
+              value: /home/kagesec
+            {{- if $secret }}
+            {{- range $key := list "ANTHROPIC_API_KEY" "NVD_API_KEY" "KAGESEC_AUTH_BEARER" "KAGESEC_AUTH_COOKIE" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ $key }}
+                  optional: true
             {{- end }}
-            {{- if .Values.nvdApiKey }}
-            - name: NVD_API_KEY
-              value: {{ .Values.nvdApiKey | quote }}
             {{- end }}
           resources:
             {{- toYaml .Values.job.resources | nindent 12 }}
-          {{- if .Values.reports.enabled }}
           volumeMounts:
             - name: reports
               mountPath: {{ .Values.reports.mountPath }}
-          {{- end }}
-      {{- if .Values.reports.enabled }}
+            # Writable scratch space — the root filesystem is read-only
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/kagesec
+            - name: dshm
+              mountPath: /dev/shm
       volumes:
         - name: reports
+          {{- if .Values.reports.enabled }}
           persistentVolumeClaim:
             claimName: {{ include "kagesec.fullname" . }}-reports
-      {{- end }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi

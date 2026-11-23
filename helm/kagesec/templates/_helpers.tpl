@@ -17,3 +17,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- include "kagesec.fullname" . }}
 {{- end }}
 {{- end }}
+
+{{- define "kagesec.secretName" -}}
+{{- if .Values.existingSecret }}
+{{- .Values.existingSecret }}
+{{- else if or .Values.anthropicApiKey .Values.nvdApiKey .Values.auth.bearer .Values.auth.cookie }}
+{{- include "kagesec.fullname" . }}
+{{- end }}
+{{- end }}

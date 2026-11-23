@@ -2,16 +2,12 @@
 import os
 import tempfile
 import textwrap
-import pytest
-import yaml
 
 from scanner.core.template_runner import (
     _parse_template,
     _parse_matcher,
     _parse_request,
     _extract_cve,
-    TemplateMatcher,
-    TemplateRequest,
 )
 from scanner.core.scan_result import Severity
 

@@ -1,0 +1,16 @@
+{{- if .Values.reports.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kagesec.fullname" . }}-reports
+  labels:
+    {{- include "kagesec.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.reports.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.reports.size }}
+{{- end }}

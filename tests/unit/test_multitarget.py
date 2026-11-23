@@ -1,8 +1,6 @@
 """Unit tests for concurrent multi-target scanning in cli/main.py."""
-import sys
 import types
 import threading
-import unittest.mock as mock
 import pytest
 
 

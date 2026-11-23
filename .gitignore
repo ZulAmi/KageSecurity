@@ -25,8 +25,12 @@ kagesec_report.json
 kagesec_report.md
 *.json.report
 
-# pytest
+# pytest / coverage / lint caches
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
 
 # Next.js
 dashboard/.next/

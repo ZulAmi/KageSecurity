@@ -54,6 +54,7 @@ dns = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pytest-httpserver>=1.0",
     "ruff>=0.4",
     "bandit>=1.7",
@@ -100,6 +101,18 @@ include = ["scanner*", "cli*"]
 
 [tool.setuptools.package-data]
 "scanner" = ["**/*.yaml", "**/*.yml", "**/*.html", "**/*.css", "**/*.j2", "_bin/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["scanner", "cli"]
+omit = ["scanner/templates/*"]
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["tests/vulnerable_app.py"]
 
 [tool.ruff.lint]
 # Pin the rule set explicitly. ruff 0.17 widened its default rules, which made CI

@@ -22,10 +22,10 @@ jobs:
       security-events: write   # for SARIF upload
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -41,11 +41,13 @@ jobs:
           TARGET: ${{ inputs.target || vars.KAGESEC_TARGET || 'http://localhost:8080' }}
           FAIL_ON: ${{ inputs.fail_on || 'high' }}
         run: |
-          kagesec scan "$TARGET" \
+          kagesec scan \
             --output all \
+            --report-dir reports \
             --fail-on "$FAIL_ON" \
             --compliance gdpr hipaa \
-            --no-browser
+            --no-browser \
+            -- "$TARGET"
 
       - name: Upload JSON report
         if: always()
@@ -53,8 +55,8 @@ jobs:
         with:
           name: kagesec-report-${{ github.run_id }}
           path: |
-            kagesec_report.json
-            kagesec_report.md
+            reports/kagesec_report.json
+            reports/kagesec_report.md
           retention-days: 30
 
       - name: Upload PDF report
@@ -62,6 +64,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kagesec-pdf-${{ github.run_id }}
-          path: kagesec_report.pdf
+          path: reports/kagesec_report.pdf
           retention-days: 30
           if-no-files-found: ignore

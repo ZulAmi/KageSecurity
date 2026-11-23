@@ -58,8 +58,14 @@ def main():
         help="Generate compliance reports (e.g. --compliance gdpr hipaa)",
     )
     scan_cmd.add_argument("--modules", nargs="+", help="Run only specific modules (e.g. --modules xss sqli)")
-    scan_cmd.add_argument("--auth-bearer", metavar="TOKEN", help="Bearer token for authenticated scanning")
-    scan_cmd.add_argument("--auth-cookie", metavar="NAME=VALUE", help="Session cookie (e.g. session=abc123)")
+    scan_cmd.add_argument(
+        "--auth-bearer", metavar="TOKEN",
+        help="Bearer token for authenticated scanning (or set KAGESEC_AUTH_BEARER)",
+    )
+    scan_cmd.add_argument(
+        "--auth-cookie", metavar="NAME=VALUE",
+        help="Session cookie, e.g. session=abc123 (or set KAGESEC_AUTH_COOKIE)",
+    )
     scan_cmd.add_argument(
         "--auth-oauth2-token-url", metavar="URL",
         help="OAuth2 token endpoint for client credentials flow",
@@ -137,7 +143,7 @@ def main():
         ),
     )
     scan_cmd.add_argument("--resume", metavar="SCAN_ID", help="Resume an interrupted scan")
-    scan_cmd.add_argument("--nvd-api-key", metavar="KEY", help="NVD API key for CVE enrichment")
+    scan_cmd.add_argument("--nvd-api-key", metavar="KEY", help="NVD API key for CVE enrichment (or set NVD_API_KEY)")
     scan_cmd.add_argument("--templates", nargs="+", metavar="DIR", help="Extra YAML template directories")
     scan_cmd.add_argument("--skip-templates", action="store_true", help="Disable built-in YAML template scanning")
     scan_cmd.add_argument("--nuclei-templates", action="store_true", help="Include Nuclei community templates (~10k templates, slow without --api-key)")
@@ -758,7 +764,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         openapi_spec=args.openapi,
         graphql_endpoint=args.graphql,
         resume_scan_id=args.resume,
-        nvd_api_key=args.nvd_api_key,
+        nvd_api_key=args.nvd_api_key or os.getenv("NVD_API_KEY"),
         template_dirs=args.templates or [],
         nuclei_templates=getattr(args, "nuclei_templates", False),
         nuclei_include_info=getattr(args, "nuclei_info", False),
@@ -1378,11 +1384,15 @@ def _build_auth(args) -> dict | None:
         print("[!] OAuth2 token exchange failed — continuing unauthenticated.")
         return None
 
-    if getattr(args, "auth_bearer", None):
-        return {"type": "bearer", "value": args.auth_bearer}
+    # Environment variables keep secrets out of shell history, `ps` output and
+    # Kubernetes pod specs; explicit flags still win.
+    bearer = getattr(args, "auth_bearer", None) or os.getenv("KAGESEC_AUTH_BEARER")
+    if bearer:
+        return {"type": "bearer", "value": bearer}
 
-    if getattr(args, "auth_cookie", None):
-        name, _, value = args.auth_cookie.partition("=")
+    cookie = getattr(args, "auth_cookie", None) or os.getenv("KAGESEC_AUTH_COOKIE")
+    if cookie:
+        name, _, value = cookie.partition("=")
         return {"type": "cookie", "cookies": {name: value}}
 
     return None

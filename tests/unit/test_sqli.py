@@ -4,7 +4,6 @@ from scanner.modules.sqli import (
     _error_match,
     _extract_version_from_error,
     _get_payloads,
-    ERROR_SIGNATURES,
     _WAF_BYPASS_ERROR,
     _WAF_BYPASS_UNION,
     _INJECTABLE_HEADERS,
