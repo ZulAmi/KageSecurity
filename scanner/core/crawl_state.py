@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 _STATE_DIR = os.path.expanduser("~/.kagesec/crawl_state")
@@ -49,7 +49,7 @@ def save_state(target: str, pages: list):
     os.makedirs(_STATE_DIR, exist_ok=True)
     state = {
         "target": target,
-        "scan_date": datetime.utcnow().isoformat(),
+        "scan_date": datetime.now(timezone.utc).isoformat(),
         "pages": {p.url: _page_hash(p) for p in pages},
     }
     try:

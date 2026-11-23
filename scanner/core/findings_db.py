@@ -208,7 +208,19 @@ def get_previous_scan_keys(target: str) -> set[tuple]:
     return {(r["title"], r["url"], r["parameter"] or "") for r in rows}
 
 
-def classify_scan(scan_id: str, result: "ScanResult", target: str) -> dict:
+def _identity(key: tuple) -> tuple:
+    """(title, url, param) → (title, host, param): the identity findings are deduped on."""
+    from urllib.parse import urlparse
+    title, url, param = key
+    return (title, urlparse(url or "").netloc, param or "")
+
+
+def classify_scan(
+    scan_id: str,
+    result: "ScanResult",
+    target: str,
+    unscanned_urls: "set[str] | None" = None,
+) -> dict:
     """Classify findings into New / Repeated / Regressed / Resolved.
 
     Modelled on Burp Enterprise issue tracking and ZAP Retest add-on:
@@ -223,6 +235,10 @@ def classify_scan(scan_id: str, result: "ScanResult", target: str) -> dict:
           "resolved": [(title, url, param), ...]   # findings fixed since last scan
         }
     Attaches results to result.scan_states and result.resolved_findings.
+
+    *unscanned_urls* are pages that were deliberately not tested this run (delta
+    mode). A previous finding on one of them was not re-checked, so it is never
+    reported as RESOLVED.
     """
     prev_keys = get_previous_scan_keys(target)
     current_keys = {
@@ -231,8 +247,16 @@ def classify_scan(scan_id: str, result: "ScanResult", target: str) -> dict:
         if not f.false_positive_suppressed
     }
 
-    repeated_keys = current_keys & prev_keys
-    resolved_keys = prev_keys  - current_keys
+    # Compare on the same identity ScanResult deduplicates on — (title, host, param) —
+    # so a host-level finding reported via /about in one scan and /logout in the next
+    # is the same finding, not one RESOLVED plus one NEW.
+    prev_ids = {_identity(k) for k in prev_keys}
+    current_ids = {_identity(k) for k in current_keys}
+    unscanned = unscanned_urls or set()
+    resolved_keys = {
+        k for k in prev_keys
+        if _identity(k) not in current_ids and k[1] not in unscanned
+    }
 
     # Detect regressions: a finding present in an older scan, absent in the
     # immediately preceding scan (resolved), but present again now.
@@ -250,15 +274,15 @@ def classify_scan(scan_id: str, result: "ScanResult", target: str) -> dict:
                 "SELECT title, url, parameter FROM findings WHERE scan_id=? AND target=?",
                 (second_last_id, target),
             ).fetchall()
-            older_keys = {(r["title"], r["url"], r["parameter"] or "") for r in older_rows}
+            older_ids = {_identity((r["title"], r["url"], r["parameter"] or "")) for r in older_rows}
             # Regressed = in older scan AND NOT in previous scan AND in current scan
-            regressed_keys = (older_keys - prev_keys) & current_keys
+            regressed_keys = {k for k in current_keys if _identity(k) in older_ids - prev_ids}
 
     states: dict[tuple, str] = {}
     for k in current_keys:
         if k in regressed_keys:
             states[k] = "regressed"
-        elif k in repeated_keys:
+        elif _identity(k) in prev_ids:
             states[k] = "repeated"
         else:
             states[k] = "new"

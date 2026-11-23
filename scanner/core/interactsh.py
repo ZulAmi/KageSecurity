@@ -29,6 +29,8 @@ import urllib.request
 import urllib.error
 from dataclasses import dataclass
 
+from scanner import __version__
+
 
 @dataclass
 class Interaction:
@@ -125,7 +127,7 @@ class InteractshClient:
                 f"https://{self._server}/poll"
                 f"?id={self._correlation_id}&secret={self._secret_key}"
             )
-            req = urllib.request.Request(url, headers={"User-Agent": "KageSec/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"KageSec/{__version__}"})
             with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
                 data = json.loads(resp.read())
 

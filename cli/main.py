@@ -2,11 +2,10 @@ import os
 import sys
 import json
 import argparse
-import tempfile
 import threading
 import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scanner.core.engine import run_scan
+from scanner.core.engine import run_scan, auto_rate_limit
 from scanner.core.config import ScanConfig, LoginFlow
 from scanner.core import policy as _policy
 
@@ -14,6 +13,9 @@ from scanner.core import policy as _policy
 # (e.g. piped to a file, run in CI, or captured by a background task runner)
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
+
+# Most to least severe. Used by --fail-on, diff and issue export.
+SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
 
 def main():
@@ -85,7 +87,7 @@ def main():
         help="Custom OOB callback domain (default: oast.pro)",
     )
     scan_cmd.add_argument(
-        "--fail-on", choices=["critical", "high", "medium", "low"],
+        "--fail-on", choices=SEVERITY_ORDER,
         help="Exit with code 1 if findings at this severity or above are found (CI/CD mode)",
     )
     scan_cmd.add_argument(
@@ -162,7 +164,8 @@ def main():
     )
     scan_cmd.add_argument(
         "--rate-limit", type=int, default=None, metavar="RPS",
-        help="Maximum HTTP requests per second across the whole scan (default: 10).",
+        help="Maximum HTTP requests per second across the whole scan "
+             "(default: 3 x --concurrency, min 10, max 300).",
     )
     scan_cmd.add_argument(
         "--har", metavar="FILE",
@@ -199,8 +202,15 @@ def main():
     scan_cmd.add_argument("--subdomain-wordlist", metavar="FILE", help="Custom subdomain enumeration wordlist")
     scan_cmd.add_argument("--policy", metavar="FILE", help="Scan policy YAML — per-module enable/strength/timeout overrides")
     scan_cmd.add_argument(
+        "--delta", action="store_true",
+        help=(
+            "Delta mode — only test pages whose content changed since the last scan of this target. "
+            "Faster for CI, but unchanged pages are not re-tested (their earlier findings stay open)."
+        ),
+    )
+    scan_cmd.add_argument(
         "--full", action="store_true",
-        help="Force a full scan — ignore delta state and re-scan all URLs even if unchanged since last scan",
+        help="Force a full scan even when --delta or a profile enables delta mode (full is the default)",
     )
     scan_cmd.add_argument(
         "--notify-slack", metavar="URL",
@@ -303,7 +313,7 @@ def main():
     diff_cmd.add_argument("baseline", help="Baseline JSON report (earlier scan)")
     diff_cmd.add_argument("current", help="Current JSON report (later scan)")
     diff_cmd.add_argument(
-        "--fail-on", choices=["critical", "high", "medium", "low"],
+        "--fail-on", choices=SEVERITY_ORDER,
         help="Exit with code 1 if new findings at this severity or above are found",
     )
     diff_cmd.add_argument("--output", choices=["text", "json"], default="text", help="Diff output format")
@@ -387,7 +397,11 @@ def main():
     supp_rm.add_argument("rule_id", help="Rule ID shown in 'suppress list'")
 
     # ------------------------------------------------------------------ retest
-    retest_cmd = sub.add_parser("retest", help="Re-run a specific finding to verify if it still exists")
+    retest_cmd = sub.add_parser(
+        "retest",
+        help="Re-run a specific finding to verify if it still exists "
+             "(exit 0 = not reproduced, 1 = still present, 2 = inconclusive)",
+    )
     retest_cmd.add_argument("finding_id", help="Finding index (0-based) or 'title:substring' to match")
     retest_cmd.add_argument("--report", metavar="FILE", default="kagesec_report.json",
                             help="JSON report file containing the finding (default: kagesec_report.json)")
@@ -513,6 +527,7 @@ def main():
         sys.exit(0)
 
     # ------------------------------------------------------------------ scan logic
+    args._explicit = _explicit_dests(scan_cmd, sys.argv[1:])
     if not args.target and not getattr(args, "targets", None) and not getattr(args, "har", None):
         scan_cmd.error("provide a target URL, --targets FILE, or --har FILE")
 
@@ -521,12 +536,36 @@ def main():
     if len(targets) > 1:
         _run_multi_target(targets, args)
     else:
-        _run_single_target(targets[0], args, prefix="")
+        sys.exit(_run_single_target(targets[0], args, prefix=""))
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _explicit_dests(subparser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    """Return the argparse dests the user actually supplied for *subparser*.
+
+    Re-parses the arguments after the sub-command with every default replaced by
+    SUPPRESS, so only options present on the command line appear in the result —
+    including abbreviations, ``--opt=value`` and paired flags like --no-browser.
+    """
+    import copy
+
+    try:
+        cmd_index = argv.index(subparser.prog.split()[-1])
+    except ValueError:
+        return set()
+    probe = copy.deepcopy(subparser)
+    for action in probe._actions:
+        action.default = argparse.SUPPRESS
+        action.required = False
+    try:
+        ns, _ = probe.parse_known_args(argv[cmd_index + 1:])
+    except SystemExit:
+        return set()
+    return set(vars(ns))
+
 
 def _interactive_ai_setup() -> tuple[str | None, str | None]:
     """Show a numbered provider menu when no AI key is configured.
@@ -686,23 +725,26 @@ def _run_multi_target(targets: list[str], args) -> None:
 
 def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
     """Run scan against one target. Returns 1 if --fail-on threshold is breached."""
-    # Apply scan profile first (lowest priority), then persisted policy
+    # Precedence: CLI flags > --profile > ~/.kagesec/config.yaml > built-in defaults.
+    # `_explicit` holds the options the user actually typed (see _explicit_dests).
+    explicit = getattr(args, "_explicit", None)
+    _policy.apply_to_namespace(_policy.load(), args, explicit)
     profile_name = getattr(args, "profile", None)
     if profile_name:
         from scanner.core import profiles as _profiles
         try:
             prof = _profiles.load(profile_name)
-            _profiles.apply_to_namespace(prof, args)
+            _profiles.apply_to_namespace(prof, args, explicit)
         except ValueError as e:
             print(f"[!] {e}")
             sys.exit(1)
 
-    # Apply persisted policy defaults (CLI overrides them via argparse defaults check)
-    _policy.apply_to_namespace(_policy.load(), args)
-
     auth = _build_auth(args)
     login_flow = _build_login_flow(args)
     modules = _build_modules(args)
+    if login_flow and not args.browser:
+        print("[!] --login-* options need the browser crawler; ignoring them because --no-browser is set.")
+        login_flow = None
 
     config = ScanConfig(
         target=target,
@@ -729,7 +771,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         oob_server=getattr(args, "oob_server", None) or "oast.pro",
         include_patterns=getattr(args, "include", None) or [],
         exclude_patterns=getattr(args, "exclude", None) or [],
-        rate_limit_rps=getattr(args, "rate_limit", None) or 10,
+        rate_limit_rps=getattr(args, "rate_limit", None) or auto_rate_limit(getattr(args, "concurrency", 8)),
         har_file=getattr(args, "har", None),
         wsdl_url=getattr(args, "wsdl", None),
         jwt_wordlist=getattr(args, "jwt_wordlist", None),
@@ -738,6 +780,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         subdomain_wordlist=getattr(args, "subdomain_wordlist", None),
         scan_policy_file=getattr(args, "policy", None),
         force_full_scan=getattr(args, "full", False),
+        delta_scan=getattr(args, "delta", False),
         allow_code_templates=getattr(args, "allow_code_templates", False),
         timeout=getattr(args, "timeout", 10),
         retries=getattr(args, "retries", 0),
@@ -855,11 +898,12 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         mode_tags.append("browser")
 
     # First-run bootstrap: download Nuclei templates if not yet installed
-    from scanner.core import updater as _updater
-    if not getattr(args, "skip_templates", False):
+    # Nuclei community templates are only fetched/checked when --nuclei-templates is used,
+    # so a plain scan never downloads ~50 MB or calls the GitHub API.
+    if getattr(args, "nuclei_templates", False) and not getattr(args, "skip_templates", False):
+        from scanner.core import updater as _updater
         _updater.bootstrap_if_needed()
-    # Non-blocking update check (prints a notice if templates are outdated)
-    _updater.check_for_updates(auto=getattr(args, "auto_update", False))
+        _updater.check_for_updates(auto=getattr(args, "auto_update", False))
 
     import datetime as _dt
     import threading as _threading
@@ -978,8 +1022,8 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
             from scanner.core.soap_scanner import scan_wsdl
             import httpx as _httpx
             print(f"\n[*] SOAP/WSDL scan: {wsdl_url}")
-            _soap_proxies = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
-            with _httpx.Client(follow_redirects=True, timeout=15, verify=False, proxies=_soap_proxies) as _soap_client:  # nosec B501
+            _soap_kwargs = {"proxy": config.proxy} if config.proxy else {}
+            with _httpx.Client(follow_redirects=True, timeout=15, **_soap_kwargs) as _soap_client:
                 soap_findings = scan_wsdl(wsdl_url, _soap_client, config)
             if soap_findings:
                 print(f"[+] SOAP findings: {len(soap_findings)}")
@@ -1093,23 +1137,25 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
             manual = sum(1 for c in cr.controls if c.status == "manual")
             print(f"    {cr.standard:<12} {cr.score:.0f}/100  (pass:{passed} fail:{failed} manual:{manual})")
 
+    _print_scan_errors(result.errors, verbose=getattr(args, "verbose", False))
+
     slug = f"_{prefix}" if prefix else ""
-    _write_reports(args, result, report_md, slug)
+    written = _write_reports(args, result, report_md, slug)
+    _write_github_outputs(written, result)
 
     if args.fail_on:
-        severity_order = ["critical", "high", "medium", "low"]
-        threshold_idx = severity_order.index(args.fail_on)
-        for finding in result.findings:
-            if severity_order.index(finding.severity.value) <= threshold_idx:
-                print(f"\n[!] Failing CI: {args.fail_on.upper()} or above findings detected.")
-                return 1
+        breaching = findings_at_or_above(result.findings, args.fail_on)
+        if breaching:
+            print(f"\n[!] Failing CI: {len(breaching)} finding(s) at {args.fail_on.upper()} or above.")
+            return 1
     return 0
 
 
-def _write_reports(args, result, report_md, slug: str) -> None:
-    import os
+def _write_reports(args, result, report_md, slug: str) -> dict:
+    """Write the requested report formats. Returns {format: path} for files written."""
     reports_dir = getattr(args, "report_dir", None) or "reports"
     os.makedirs(reports_dir, exist_ok=True)
+    written: dict[str, str] = {}
 
     def _rpath(filename: str) -> str:
         return os.path.join(reports_dir, filename)
@@ -1122,6 +1168,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
                 # default=str converts any non-serializable value (e.g. set, Enum)
                 # to its string representation rather than crashing
                 json.dump(out, fp, indent=2, default=str)
+            written["json"] = path
             print(f"\n[+] JSON report:     {path}")
         except Exception as e:
             print(f"\n[!] Failed to write JSON report ({path}): {e}")
@@ -1138,6 +1185,7 @@ def _write_reports(args, result, report_md, slug: str) -> None:
         try:
             from scanner.reporters.sarif_reporter import generate_sarif
             sarif_path = generate_sarif(result, _rpath(f"kagesec_report{slug}.sarif"))
+            written["sarif"] = sarif_path
             print(f"[+] SARIF report:    {sarif_path}")
         except Exception as e:
             print(f"[!] SARIF generation failed: {e}")
@@ -1171,6 +1219,56 @@ def _write_reports(args, result, report_md, slug: str) -> None:
         except Exception as e:
             print(f"[!] ZAP export failed: {e}")
 
+    return written
+
+
+def findings_at_or_above(findings, threshold: str) -> list:
+    """Findings at *threshold* severity or worse, excluding ones AI marked false positive."""
+    limit = SEVERITY_ORDER.index(threshold)
+    return [
+        f for f in findings
+        if not getattr(f, "false_positive_suppressed", False)
+        and _severity_rank(getattr(f.severity, "value", f.severity)) <= limit
+    ]
+
+
+def _severity_rank(severity: str) -> int:
+    try:
+        return SEVERITY_ORDER.index(str(severity).lower())
+    except ValueError:
+        return len(SEVERITY_ORDER)  # unknown severities never breach a threshold
+
+
+def _print_scan_errors(errors: list, verbose: bool = False) -> None:
+    """Show problems that happened during the scan instead of hiding them."""
+    if not errors:
+        return
+    # Informational notes ([perf], [delta], [auth] reuse) only in verbose mode.
+    notes = ("[perf]", "[delta]", "[cross-module]", "[AI FP suppressed]", "[info]")
+    problems = [e for e in errors if verbose or not str(e).startswith(notes)]
+    if not problems:
+        return
+    print(f"\n[!] {len(problems)} issue(s) during the scan (they may hide findings):")
+    for e in problems[:15]:
+        print(f"    - {str(e)[:300]}")
+    if len(problems) > 15:
+        print(f"    … and {len(problems) - 15} more (full list in the JSON report under 'errors')")
+
+
+def _write_github_outputs(written: dict, result) -> None:
+    """Expose report-path / findings-count to GitHub Actions (declared in action.yml)."""
+    out_file = os.getenv("GITHUB_OUTPUT")
+    if not out_file:
+        return
+    report_path = written.get("sarif") or written.get("json") or ""
+    count = sum(1 for f in result.findings if not getattr(f, "false_positive_suppressed", False))
+    try:
+        with open(out_file, "a") as fh:
+            fh.write(f"report-path={report_path}\n")
+            fh.write(f"findings-count={count}\n")
+    except OSError as e:
+        print(f"[!] Could not write GitHub Actions outputs: {e}")
+
 
 def _findings_dict(result) -> dict:
     summary = result.summary()
@@ -1196,6 +1294,7 @@ def _findings_dict(result) -> dict:
             "remediation": f.remediation,
             "standards": f.standards,
             "poc_curl": f.poc_curl,
+            "module": f.module,
         }
 
     return {
@@ -1203,6 +1302,7 @@ def _findings_dict(result) -> dict:
         "findings": [_serialise(f) for f in result.findings if not f.false_positive_suppressed],
         "suppressed": [_serialise(f) for f in result.findings if f.false_positive_suppressed],
         "compliance": [cr.summary() for cr in result.compliance_reports],
+        "errors": [str(e) for e in result.errors],
     }
 
 
@@ -1246,7 +1346,7 @@ def _run_diff(args) -> None:
 
         if new_findings:
             print("\n--- NEW ---")
-            for f in sorted(new_findings, key=lambda x: x.get("severity", "low")):
+            for f in sorted(new_findings, key=lambda x: _severity_rank(x.get("severity", "info"))):
                 print(f"  [{f['severity'].upper():<8}] {f['title']}")
                 print(f"             {f['url']}")
 
@@ -1256,12 +1356,10 @@ def _run_diff(args) -> None:
                 print(f"  [{f['severity'].upper():<8}] {f['title']}")
 
     if args.fail_on:
-        severity_order = ["critical", "high", "medium", "low"]
-        threshold_idx = severity_order.index(args.fail_on)
-        for f in new_findings:
-            if severity_order.index(f.get("severity", "low")) <= threshold_idx:
-                print(f"\n[!] New {args.fail_on.upper()}+ findings detected.")
-                sys.exit(1)
+        limit = SEVERITY_ORDER.index(args.fail_on)
+        if any(_severity_rank(f.get("severity", "info")) <= limit for f in new_findings):
+            print(f"\n[!] New {args.fail_on.upper()}+ findings detected.")
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1407,7 +1505,8 @@ def _export_scan(scan_id: str, report_path: str, out_path: str) -> None:
         print(f"[!] {e}")
         sys.exit(1)
 
-    checkpoint = os.path.join(tempfile.gettempdir(), f"kagesec_{scan_id}.json")
+    from scanner.core.engine import checkpoint_path
+    checkpoint = checkpoint_path(scan_id)
     if not os.path.exists(checkpoint):
         print(f"[!] Checkpoint not found: {checkpoint}")
         print(f"    Make sure scan_id '{scan_id}' was run on this machine.")
@@ -1471,7 +1570,8 @@ def _import_scan(zip_path: str) -> None:
 
             checkpoint_name = f"kagesec_{scan_id}.json"
             if checkpoint_name in names:
-                dest = os.path.join(tempfile.gettempdir(), checkpoint_name)
+                from scanner.core.engine import checkpoint_path
+                dest = checkpoint_path(scan_id)
                 with open(dest, "wb") as f:
                     f.write(zf.read(checkpoint_name))
                 print(f"[+] Checkpoint restored to: {dest}")
@@ -1836,26 +1936,23 @@ def _run_retest(args) -> None:
         print(f"    Payload:   {payload[:80]}")
     print()
 
-    # Determine which module to use based on title keywords
-    module_map = {
-        "xss": "xss", "sqli": "sqli", "sql": "sqli", "injection": "sqli",
-        "open redirect": "open_redirect", "redirect": "open_redirect",
-        "csrf": "csrf", "ssrf": "ssrf", "xxe": "xxe",
-        "jwt": "jwt_attacks", "header": "security_headers",
-        "cors": "cors", "directory": "directory_listing",
-        "traversal": "path_traversal", "upload": "file_upload",
-        "deserialization": "deserialization", "graphql": "graphql",
-        "host": "host_header", "csti": "csti",
-        "business": "business_logic", "wizard": "multistep_injection",
-        "blind xss": "blind_xss", "entropy": "session_entropy",
-        "oauth": "oauth",
-    }
-    module_name = None
+    # Which module produced the finding: recorded in the report since this version;
+    # for older reports fall back to specific title keywords (most specific first).
+    module_name = target_finding.get("module")
     title_lower = title.lower()
-    for keyword, mod in module_map.items():
-        if keyword in title_lower:
-            module_name = mod
-            break
+    if not module_name:
+        keyword_map = [
+            ("blind xss", "blind_xss"), ("client-side template", "csti"), ("csti", "csti"),
+            ("server-side template", "ssti"), ("ssti", "ssti"), ("server-side include", "ssi"),
+            ("command injection", "cmd_injection"), ("crlf", "crlf"), ("host header", "host_header"),
+            ("sql", "sqli"), ("xss", "xss"), ("cross-site scripting", "xss"),
+            ("open redirect", "open_redirect"), ("csrf", "csrf"), ("ssrf", "ssrf"), ("xxe", "xxe"),
+            ("jwt", "jwt_attacks"), ("cors", "cors"), ("traversal", "path_traversal"),
+            ("upload", "file_upload"), ("deserialization", "deserialization"), ("graphql", "graphql"),
+            ("business", "business_logic"), ("wizard", "multistep_injection"),
+            ("entropy", "session_entropy"), ("oauth", "oauth"), ("security header", "security_headers"),
+        ]
+        module_name = next((mod for kw, mod in keyword_map if kw in title_lower), None)
 
     # Find the module object
     target_module = None
@@ -1869,11 +1966,14 @@ def _run_retest(args) -> None:
     parsed = urlparse(url)
     base_target = f"{parsed.scheme}://{parsed.netloc}"
 
-    api_key = getattr(args, "api_key", None) or os.getenv("ANTHROPIC_API_KEY")
-    config = ScanConfig(target=base_target, max_depth=1, max_pages=1)
-    config.api_key = api_key if not getattr(args, "no_ai", False) else None
+    no_ai = getattr(args, "no_ai", False)
+    api_key = None if no_ai else (getattr(args, "api_key", None) or os.getenv("ANTHROPIC_API_KEY"))
+    config = ScanConfig(target=base_target, max_depth=1, max_pages=1, ai_enabled=not no_ai, use_oob=False)
+    config.api_key = api_key
 
-    with httpx.Client(follow_redirects=True, timeout=15, verify=False) as client:  # nosec B501
+    from scanner.core.engine import _run_module
+
+    with httpx.Client(follow_redirects=True, timeout=15) as client:
         # Fast path (ZAP Retest approach): if poc_curl is available, replay the exact
         # HTTP request first. This takes < 2s vs. re-running the full module.
         poc_curl = target_finding.get("poc_curl", "")
@@ -1915,16 +2015,14 @@ def _run_retest(args) -> None:
             print(f"[!] Could not fetch {url}: {e}")
             sys.exit(1)
 
+        precise = target_module is not None
         if target_module:
             print(f"[*] Running module: {module_name}")
             try:
-                new_findings = target_module.test(page, client, config)
-            except TypeError:
-                try:
-                    new_findings = target_module.test(page, client)
-                except Exception as e2:
-                    print(f"[!] Module error: {e2}")
-                    new_findings = []
+                new_findings = _run_module(target_module, page, client, oob=None, config=config)
+            except Exception as e:
+                print(f"[!] Module error: {e}")
+                sys.exit(2)
         else:
             # Narrowed fallback: map by owasp_category / cwe instead of running all 61 modules
             _OWASP_MODULE_MAP = {
@@ -1950,15 +2048,18 @@ def _run_retest(args) -> None:
             new_findings = []
             for mod in _candidate_modules:
                 try:
-                    res = mod.test(page, client, config)
-                    new_findings.extend(res or [])
+                    new_findings.extend(_run_module(mod, page, client, oob=None, config=config))
                 except Exception:
                     pass
 
     # Report results
     if not new_findings:
-        print("\n[+] RESOLVED — Finding no longer detected.")
-        print("    The vulnerability may have been fixed or requires specific conditions.")
+        if precise:
+            print(f"\n[+] RESOLVED — {module_name} no longer detects this finding.")
+            print("    Recommend a full rescan to confirm the fix holds.")
+        else:
+            print("\n[+] NOT REPRODUCED — candidate modules found nothing on this page.")
+            print("    The originating module was not known, so treat this as indicative only.")
         sys.exit(0)
 
     matched = [f for f in new_findings if title_lower[:30] in f.title.lower()]
@@ -1969,9 +2070,10 @@ def _run_retest(args) -> None:
             print(f"    URL: {f.url}")
             if f.evidence:
                 print(f"    Evidence: {f.evidence[:120]}")
-    else:
-        print(f"\n[~] INCONCLUSIVE — {len(new_findings)} findings on this page but original not re-confirmed.")
-        print("    The finding may require specific payload/session context to reproduce.")
+        sys.exit(1)
+    print(f"\n[~] INCONCLUSIVE — {len(new_findings)} findings on this page but original not re-confirmed.")
+    print("    The finding may require specific payload/session context to reproduce.")
+    sys.exit(2)
 
 
 def _run_issues(args) -> None:

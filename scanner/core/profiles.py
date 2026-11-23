@@ -118,10 +118,11 @@ def load(name: str) -> dict[str, Any]:
     )
 
 
-def apply_to_namespace(profile: dict[str, Any], args) -> None:
+def apply_to_namespace(profile: dict[str, Any], args, explicit: set[str] | None = None) -> None:
     """
-    Apply profile settings to argparse namespace, but only for keys the user
-    did NOT supply explicitly (i.e. still at argparse default).
+    Apply profile settings to the argparse namespace for every option the user
+    did NOT pass on the command line (*explicit* = set of dests they typed).
+    With explicit=None, falls back to the legacy "still at default" check.
     """
     _DEFAULTS = {
         "depth": 3, "max_pages": 100, "concurrency": 8,
@@ -139,6 +140,10 @@ def apply_to_namespace(profile: dict[str, Any], args) -> None:
     }
     for prof_key, arg_attr in _MAP.items():
         if prof_key not in profile:
+            continue
+        if explicit is not None:
+            if arg_attr not in explicit:
+                setattr(args, arg_attr, profile[prof_key])
             continue
         default = _DEFAULTS.get(prof_key)
         current = getattr(args, arg_attr, default)

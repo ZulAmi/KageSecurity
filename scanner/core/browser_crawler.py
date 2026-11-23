@@ -87,10 +87,15 @@ class BrowserCrawler:
 
         ctx: BrowserContext = browser.new_context(**ctx_kwargs)
 
+        # set_extra_http_headers() replaces (not merges) earlier calls, so build
+        # one dict — otherwise -H would silently drop the bearer token.
+        extra_headers: dict = {}
         if config and config.auth:
             auth = config.auth
             if auth.get("type") == "bearer":
-                ctx.set_extra_http_headers({"Authorization": f"Bearer {auth['value']}"})
+                extra_headers["Authorization"] = f"Bearer {auth['value']}"
+            elif auth.get("type") == "basic":
+                extra_headers["Authorization"] = f"Basic {auth['value']}"
             elif auth.get("type") == "cookie" and auth.get("cookies"):
                 cookies = [
                     {"name": k, "value": v, "url": self.base_url}
@@ -99,7 +104,9 @@ class BrowserCrawler:
                 ctx.add_cookies(cookies)
 
         if config and config.headers:
-            ctx.set_extra_http_headers(config.headers)
+            extra_headers.update(config.headers)
+        if extra_headers:
+            ctx.set_extra_http_headers(extra_headers)
 
         return ctx
 
@@ -208,13 +215,30 @@ class BrowserCrawler:
         for t in threads:
             t.start()
 
-        work_queue.join()
+        # Equivalent to work_queue.join(), but gives up if every worker has died
+        # (e.g. Chromium failed to launch) instead of blocking forever.
+        with work_queue.all_tasks_done:
+            while work_queue.unfinished_tasks:
+                if not any(t.is_alive() for t in threads):
+                    break
+                work_queue.all_tasks_done.wait(timeout=0.5)
         stop_event.set()
 
         for t in threads:
             t.join(timeout=10.0)
 
         return results
+
+    def session_cookies(self) -> list:
+        """Cookies held by the main (logged-in) browser context.
+
+        The engine copies these into the httpx client the modules use, so an
+        authenticated crawl is followed by an authenticated attack phase.
+        """
+        try:
+            return list(self._context.storage_state().get("cookies", []))
+        except Exception:
+            return []
 
     def close(self):
         try:
@@ -374,7 +398,8 @@ class BrowserCrawler:
                 discovered.append((link, depth + 1))
 
             for api_url in network_reqs:
-                discovered.append((api_url, depth + 1))
+                if self._in_scope(api_url):
+                    discovered.append((api_url, depth + 1))
 
             return result, discovered
 
