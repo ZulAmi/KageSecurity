@@ -36,6 +36,11 @@ All notable changes to KageSec are documented here. The format follows
   automatically; an opt-in, allow-listed version lives in `examples/claude-code-hook/`.
 
 ### Fixed
+- Authenticated scans with supplied cookies (`--auth-cookie`, `--cookie-jar`) no longer
+  turn anonymous partway through. A fuzzing request that made the server issue a new
+  cookie used to leave both values in the shared cookie jar (e.g.
+  `security=low; security=impossible`), so modules that ran later saw only the login
+  page. Supplied cookies now stay authoritative for the whole scan.
 - `--fail-on` now actually exits with code 1 for single-target scans (the exit code
   was previously discarded), accepts `info`, no longer crashes when INFO findings are
   present, and ignores findings the AI marked as false positives. Same for `diff`.
@@ -65,6 +70,9 @@ All notable changes to KageSec are documented here. The format follows
   `diff --output json` and the MCP stdio stream stay machine-readable.
 
 ### Changed
+- Plain HTTP on a loopback address (`localhost`, `127.0.0.1`, `::1`) is reported as
+  INFO instead of HIGH, since that traffic can't be intercepted on a network. HTTP on
+  any other host is still HIGH.
 - Delta scanning is now opt-in with `--delta`; full scans are the default. `--full`
   is kept for compatibility.
 - Nuclei community templates are only downloaded or update-checked when
@@ -79,6 +87,11 @@ All notable changes to KageSec are documented here. The format follows
 - New `kagesec mcp` command and `[mcp]` extra (`[claude]` remains as an alias).
 - Version strings in the User-Agent, SARIF output and API come from the installed
   package version.
+
+### Testing
+- The integration suite (DVWA, Juice Shop, clean nginx) now runs nightly in CI and
+  passes. It authenticates to DVWA properly, uses the browser crawler for Juice Shop,
+  and asserts on the exact finding titles.
 
 ### Deployment and packaging
 - **Docker:** the image now includes the Go template engine, runs as a non-root user
