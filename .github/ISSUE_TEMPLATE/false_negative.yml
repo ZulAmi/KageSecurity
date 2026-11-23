@@ -1,0 +1,46 @@
+name: False negative (missed vulnerability)
+description: A real vulnerability that KageSec did not report.
+labels: [false-negative, detection]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Missed findings are the hardest bugs to notice, so these reports are very valuable.
+        If the target is public and intentionally vulnerable (DVWA, Juice Shop, ginandjuice.shop, …), say which one —
+        that lets us add it to the regression suite.
+  - type: input
+    id: vuln
+    attributes:
+      label: Vulnerability class
+      placeholder: SQL injection (time-based blind), stored XSS, SSRF via webhook URL, …
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it manually
+      description: The request (curl is ideal) that proves the vulnerability exists.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: KageSec command used
+      render: shell
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The vulnerable page was crawled (it appears in the report or verbose output)
+        - label: The relevant module ran (not excluded via --modules, --passive, a profile, or a scan policy)
+        - label: The JSON report's `errors` list has no module errors or timeouts for this page
+  - type: input
+    id: version
+    attributes:
+      label: KageSec version
+    validations:
+      required: true

@@ -1,0 +1,44 @@
+name: False positive
+description: KageSec reported a vulnerability that is not real.
+labels: [false-positive, detection]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        False-positive reports are how detection gets better — thank you.
+        Remove anything sensitive (tokens, cookies, internal hostnames) before posting.
+  - type: input
+    id: finding
+    attributes:
+      label: Finding title and module
+      description: The `title` and `module` fields from the JSON report.
+      placeholder: "Reflected Cross-Site Scripting (XSS) — module: xss"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Finding as reported
+      description: Paste the finding from the JSON report (url, parameter, payload, evidence, poc_curl).
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is not a real vulnerability
+      description: For example — the payload is reflected but HTML-encoded; the "error" text is part of normal page content.
+    validations:
+      required: true
+  - type: textarea
+    id: response
+    attributes:
+      label: Relevant response snippet
+      description: The part of the HTTP response that shows why it is safe (if you can share it).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: KageSec version
+    validations:
+      required: true
