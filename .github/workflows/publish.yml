@@ -196,10 +196,21 @@ jobs:
       id-token: write   # trusted publishing; also produces PEP 740 attestations
 
     steps:
-      - uses: actions/download-artifact@v4
+      # Download the distributions by name. The run also contains Docker build
+      # records (*.dockerbuild, uploaded unzipped by docker/build-push-action),
+      # which download-artifact cannot extract.
+      - name: Download wheels
+        uses: actions/download-artifact@v4
         with:
+          pattern: wheel-*
           path: dist/
           merge-multiple: true
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
 
       - name: List distributions
         run: ls -lh dist/
@@ -220,10 +231,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      # Download the distributions by name. The run also contains Docker build
+      # records (*.dockerbuild, uploaded unzipped by docker/build-push-action),
+      # which download-artifact cannot extract.
+      - name: Download wheels
+        uses: actions/download-artifact@v4
         with:
+          pattern: wheel-*
           path: dist/
           merge-multiple: true
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
 
       - name: Create release
         env:
