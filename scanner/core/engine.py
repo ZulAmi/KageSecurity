@@ -635,11 +635,13 @@ def run_scan(
         result.compliance_reports = map_to_standards(result, config.compliance)
 
     report_md = None
-    from scanner.ai.provider import detect as _detect_provider
-    _ai_provider, _ai_key = _detect_provider(
-        explicit_provider=getattr(config, "ai_provider", None) if config else None,
-        explicit_key=api_key or (getattr(config, "api_key", None) if config else None),
-    )
+    _ai_provider, _ai_key = None, None
+    if getattr(config, "ai_enabled", True):
+        from scanner.ai.provider import detect as _detect_provider
+        _ai_provider, _ai_key = _detect_provider(
+            explicit_provider=getattr(config, "ai_provider", None),
+            explicit_key=api_key or getattr(config, "api_key", None),
+        )
     _ai_model = getattr(config, "ai_model", None) if config else None
     if _ai_provider:
         result = verify_findings(result, _ai_key, provider=_ai_provider, model=_ai_model)

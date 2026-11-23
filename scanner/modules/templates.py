@@ -367,9 +367,12 @@ def _get_all_templates(config, nuclei_opt: bool) -> list:
     if nuclei_opt and os.path.isdir(_NUCLEI_TEMPLATES_DIR) and _NUCLEI_TEMPLATES_DIR not in extra_dirs:
         extra_dirs.append(_NUCLEI_TEMPLATES_DIR)
 
-    cache_key = str(sorted(extra_dirs))
+    allow_code = bool(getattr(config, "allow_code_templates", False)) if config else False
+    cache_key = f"{sorted(extra_dirs)}|code={allow_code}"
     if cache_key not in _template_cache:
-        _template_cache[cache_key] = load_templates(extra_dirs if extra_dirs else None)
+        _template_cache[cache_key] = load_templates(
+            extra_dirs if extra_dirs else None, allow_code=allow_code,
+        )
     return _template_cache[cache_key]
 
 

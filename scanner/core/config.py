@@ -72,3 +72,10 @@ class ScanConfig:
     stats: bool = False                     # Mirror of --stats CLI flag; gates engine progress prints to avoid ANSI bar corruption
     concurrency: int = 8                    # Thread-pool workers; also used to scale Go engine goroutines and rate limit
     crawl_workers: int = 3                  # Parallel browser contexts for BFS crawling
+    # AI is used only when this is True *and* a provider is configured. --no-ai sets it
+    # to False, which must stop every provider call (findings can contain cookies,
+    # tokens and payloads that should not leave the machine).
+    ai_enabled: bool = True
+    # code:/flow:/javascript: templates execute on the scanner host. Off by default,
+    # mirroring Nuclei's -code flag.
+    allow_code_templates: bool = False

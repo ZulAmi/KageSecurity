@@ -88,6 +88,17 @@ def main():
         "--fail-on", choices=["critical", "high", "medium", "low"],
         help="Exit with code 1 if findings at this severity or above are found (CI/CD mode)",
     )
+    scan_cmd.add_argument(
+        "--report-dir", metavar="DIR", default="reports",
+        help="Directory to write reports into (default: reports/)",
+    )
+    scan_cmd.add_argument(
+        "--allow-code-templates", action="store_true",
+        help=(
+            "Allow templates with code:/flow:/javascript: sections. These execute scripts on "
+            "THIS machine (not the target). Only enable for templates you have reviewed."
+        ),
+    )
     scan_cmd.add_argument("--browser", action="store_true", default=True, help="Use Playwright headless browser (SPAs, JS content) [default: on]")
     scan_cmd.add_argument("--no-browser", action="store_false", dest="browser", help="Disable Playwright browser (faster, but misses JS-rendered content)")
     scan_cmd.add_argument("--login-url", metavar="URL", help="Login page URL for authenticated scanning")
@@ -299,8 +310,22 @@ def main():
 
     # ------------------------------------------------------------------ serve
     serve_cmd = sub.add_parser("serve", help="Start KageSec as an HTTP API server")
-    serve_cmd.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")  # nosec B104
+    serve_cmd.add_argument(
+        "--host", default="127.0.0.1",
+        help="Bind address (default: 127.0.0.1). Use 0.0.0.0 only inside a container or trusted network.",
+    )
     serve_cmd.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
+    serve_cmd.add_argument(
+        "--token", metavar="TOKEN", default=os.getenv("KAGESEC_API_TOKEN"),
+        help="Bearer token clients must send (default: $KAGESEC_API_TOKEN, else a random one is printed)",
+    )
+    serve_cmd.add_argument(
+        "--max-concurrent", type=int, default=1, metavar="N",
+        help="Scans to run at the same time; extra scans wait in a queue (default: 1)",
+    )
+
+    # ------------------------------------------------------------------ mcp
+    sub.add_parser("mcp", help="Run the MCP server (stdio) for Claude Code and other MCP clients")
 
     # ------------------------------------------------------------------ export
     export_cmd = sub.add_parser("export", help="Export a scan checkpoint for transfer to another machine")
@@ -413,7 +438,10 @@ def main():
 
     args = parser.parse_args()
 
-    _print_disclaimer()
+    # Only for commands that send traffic to a target. Goes to stderr so it never
+    # corrupts machine-readable stdout (diff --output json, the MCP stdio stream).
+    if args.command in ("scan", "serve", "retest", "schedule"):
+        _print_disclaimer()
 
     if not args.command:
         parser.print_help()
@@ -460,7 +488,16 @@ def main():
 
     if args.command == "serve":
         from scanner.api.server import serve
-        serve(host=args.host, port=args.port)
+        serve(host=args.host, port=args.port, token=args.token, max_concurrent=args.max_concurrent)
+        sys.exit(0)
+
+    if args.command == "mcp":
+        try:
+            from scanner.mcp_server import mcp as _mcp
+        except ImportError:
+            print('[!] The MCP server needs the "mcp" package: pip install "kagesec[mcp]"', file=sys.stderr)
+            sys.exit(1)
+        _mcp.run()
         sys.exit(0)
 
     if args.command == "export":
@@ -569,7 +606,8 @@ def _print_disclaimer() -> None:
         "  Use it ONLY on systems you own or have explicit written permission to test.\n"
         "  Unauthorized scanning may violate the CFAA, Computer Misuse Act, and\n"
         "  equivalent laws in your jurisdiction. The authors accept no liability\n"
-        "  for misuse. By proceeding you confirm you are authorized to test this target.\n"
+        "  for misuse. By proceeding you confirm you are authorized to test this target.\n",
+        file=sys.stderr,
     )
 
 
@@ -700,6 +738,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
         subdomain_wordlist=getattr(args, "subdomain_wordlist", None),
         scan_policy_file=getattr(args, "policy", None),
         force_full_scan=getattr(args, "full", False),
+        allow_code_templates=getattr(args, "allow_code_templates", False),
         timeout=getattr(args, "timeout", 10),
         retries=getattr(args, "retries", 0),
         user_agent=getattr(args, "user_agent", None),
@@ -751,8 +790,9 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
             # No key found anywhere — ask interactively
             ai_provider, api_key = _interactive_ai_setup()
 
+    config.ai_enabled = not args.no_ai and ai_provider is not None
     config.api_key = api_key
-    config.ai_provider = ai_provider or "anthropic"
+    config.ai_provider = ai_provider
     config.ai_model = ai_model
 
     # Live findings callback — prints each finding as it is discovered
@@ -1068,7 +1108,7 @@ def _run_single_target(target: str, args, prefix: str, print_lock=None) -> int:
 
 def _write_reports(args, result, report_md, slug: str) -> None:
     import os
-    reports_dir = "reports"
+    reports_dir = getattr(args, "report_dir", None) or "reports"
     os.makedirs(reports_dir, exist_ok=True)
 
     def _rpath(filename: str) -> str:
@@ -1359,6 +1399,14 @@ def _export_scan(scan_id: str, report_path: str, out_path: str) -> None:
     """
     import zipfile
 
+    from scanner.utils.safe_paths import validate_scan_id
+
+    try:
+        validate_scan_id(scan_id)
+    except ValueError as e:
+        print(f"[!] {e}")
+        sys.exit(1)
+
     checkpoint = os.path.join(tempfile.gettempdir(), f"kagesec_{scan_id}.json")
     if not os.path.exists(checkpoint):
         print(f"[!] Checkpoint not found: {checkpoint}")
@@ -1388,8 +1436,14 @@ def _export_scan(scan_id: str, report_path: str, out_path: str) -> None:
 def _import_scan(zip_path: str) -> None:
     """
     Restore a checkpoint from an exported zip so --resume works on this machine.
+
+    The archive is untrusted input: the scan id is validated before it is used in
+    a filename, and bundled reports are written by basename into the current
+    directory only, so entries like ``../../.bashrc`` cannot escape.
     """
     import zipfile
+
+    from scanner.utils.safe_paths import safe_join, validate_scan_id
 
     if not os.path.exists(zip_path):
         print(f"[!] File not found: {zip_path}")
@@ -1399,19 +1453,22 @@ def _import_scan(zip_path: str) -> None:
         with zipfile.ZipFile(zip_path) as zf:
             names = zf.namelist()
 
-            # Read metadata
             if "_meta.json" in names:
                 meta = json.loads(zf.read("_meta.json"))
                 scan_id = meta.get("scan_id")
             else:
-                # Fall back: find checkpoint file by name pattern
                 checkpoints = [n for n in names if n.startswith("kagesec_") and n.endswith(".json")]
                 if not checkpoints:
                     print("[!] No checkpoint found in the zip.")
                     sys.exit(1)
                 scan_id = checkpoints[0].removeprefix("kagesec_").removesuffix(".json")
 
-            # Restore checkpoint
+            try:
+                validate_scan_id(scan_id)
+            except ValueError as e:
+                print(f"[!] Refusing to import: {e}")
+                sys.exit(1)
+
             checkpoint_name = f"kagesec_{scan_id}.json"
             if checkpoint_name in names:
                 dest = os.path.join(tempfile.gettempdir(), checkpoint_name)
@@ -1419,12 +1476,17 @@ def _import_scan(zip_path: str) -> None:
                     f.write(zf.read(checkpoint_name))
                 print(f"[+] Checkpoint restored to: {dest}")
 
-            # Restore report if present
             for name in names:
-                if name.endswith(".json") and name != checkpoint_name and name != "_meta.json":
-                    with open(name, "wb") as f:
-                        f.write(zf.read(name))
-                    print(f"[+] Report restored to:     {name}")
+                if not name.endswith(".json") or name in (checkpoint_name, "_meta.json"):
+                    continue
+                try:
+                    dest = safe_join(os.getcwd(), os.path.basename(name))
+                except ValueError:
+                    print(f"[~] Skipping unsafe archive entry: {name!r}")
+                    continue
+                with open(dest, "wb") as f:
+                    f.write(zf.read(name))
+                print(f"[+] Report restored to:     {dest}")
 
     except zipfile.BadZipFile:
         print(f"[!] Not a valid zip file: {zip_path}")
@@ -1433,29 +1495,6 @@ def _import_scan(zip_path: str) -> None:
     print()
     print(f"[+] Scan ID: {scan_id}")
     print(f"    Resume with: kagesec scan <target> --resume {scan_id}")
-
-
-# ---------------------------------------------------------------------------
-# update-templates
-# ---------------------------------------------------------------------------
-
-# Nuclei template keys that KageSec cannot run — filter these out by default
-_UNSUPPORTED_KEYS = ("flow:", "network:", "dns:", "headless:", "ssl:", "websocket:", "whois:")
-
-# Directories inside nuclei-templates to skip entirely (non-HTTP content)
-_SKIP_DIRS = {
-    "dns", "network", "headless", "ssl", "whois",
-    "workflows", ".github", "helpers", "fuzzing",
-}
-
-
-def _is_compatible(content: bytes) -> bool:
-    """Return True if a template only uses features KageSec supports."""
-    try:
-        text = content.decode("utf-8", errors="ignore")
-        return not any(key in text for key in _UNSUPPORTED_KEYS)
-    except Exception:
-        return False
 
 
 def _run_history(args) -> None:
@@ -2004,82 +2043,19 @@ def _run_issues(args) -> None:
 
 
 def _update_templates(dest_dir: str, keep_all: bool = False) -> None:
-    import urllib.request
     import urllib.error
     import zipfile
-    import io
 
-    NUCLEI_ZIP = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"
+    from scanner.core.updater import download_templates
 
     print("[*] Downloading Nuclei community templates")
-    print(f"    Source:      {NUCLEI_ZIP}")
     print(f"    Destination: {dest_dir}")
     if not keep_all:
         print("    Filter:      compatible templates only (use --all to skip filtering)")
     print()
 
     try:
-        os.makedirs(dest_dir, exist_ok=True)
-
-        print("[*] Fetching archive (~50 MB) …")
-        req = urllib.request.Request(
-            NUCLEI_ZIP,
-            headers={"User-Agent": "KageSec/1.0 template-updater"},
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
-            data = resp.read()
-        print(f"[+] Downloaded {len(data) // 1_048_576} MB")
-
-        saved = skipped_unsupported = skipped_dir = 0
-
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            members = [m for m in zf.namelist() if m.endswith(".yaml")]
-            print(f"[*] Processing {len(members):,} YAML files …")
-
-            for member in members:
-                # Strip the top-level repo dir (nuclei-templates-main/...)
-                parts = member.split("/", 1)
-                rel = parts[1] if len(parts) > 1 else member
-
-                # Skip unsupported top-level directories
-                top = rel.split("/")[0].lower()
-                if top in _SKIP_DIRS:
-                    skipped_dir += 1
-                    continue
-
-                content = zf.read(member)
-
-                if not keep_all and not _is_compatible(content):
-                    skipped_unsupported += 1
-                    continue
-
-                out_path = os.path.join(dest_dir, rel)
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                with open(out_path, "wb") as dst:
-                    dst.write(content)
-                saved += 1
-
-        # Save version stamp so auto-update check knows what's installed
-        try:
-            from scanner.core.updater import get_remote_version, save_local_version
-            remote_ver = get_remote_version()
-            if remote_ver:
-                save_local_version(remote_ver)
-                print(f"[+] Version: {remote_ver}")
-        except Exception:
-            pass
-
-        print()
-        print(f"[+] Saved:   {saved:,} compatible templates")
-        if skipped_unsupported:
-            print(f"[~] Skipped: {skipped_unsupported:,} unsupported (flow/network/dns/headless) — use --all to keep")
-        if skipped_dir:
-            print(f"[~] Skipped: {skipped_dir:,} from non-HTTP directories (dns/network/ssl/…)")
-        print()
-        print(f"[+] Templates saved to: {dest_dir}")
-        print(f"[+] Use them: kagesec scan <target> --templates {dest_dir}")
-        print("[+] Or make permanent: add to ~/.kagesec/config.yaml  (coming soon)")
-
+        stats = download_templates(dest_dir, keep_all=keep_all)
     except urllib.error.URLError as e:
         print(f"[!] Network error: {e}")
         print("    Check your internet connection and try again.")
@@ -2090,6 +2066,19 @@ def _update_templates(dest_dir: str, keep_all: bool = False) -> None:
     except Exception as e:
         print(f"[!] Template update failed: {e}")
         sys.exit(1)
+
+    print()
+    if stats.get("version"):
+        print(f"[+] Version: {stats['version']}")
+    print(f"[+] Saved:   {stats['saved']:,} compatible templates")
+    if stats["skipped_unsupported"]:
+        print(f"[~] Skipped: {stats['skipped_unsupported']:,} unsupported "
+              "(code/flow/network/dns/headless) — use --all to keep")
+    if stats["skipped_dir"]:
+        print(f"[~] Skipped: {stats['skipped_dir']:,} from non-HTTP directories (dns/network/ssl/…)")
+    print()
+    print(f"[+] Templates saved to: {dest_dir}")
+    print("[+] Use them: kagesec scan <target> --nuclei-templates")
 
 
 if __name__ == "__main__":
