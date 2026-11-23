@@ -19,6 +19,7 @@ def clean_scan():
         target=CLEAN_URL,
         max_depth=1,
         max_pages=10,
+        use_oob=False,
     )
     result, _ = run_scan(config=config)
     return result

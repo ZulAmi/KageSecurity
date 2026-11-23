@@ -1,3 +1,4 @@
+import ipaddress
 import ssl
 import socket
 import httpx
@@ -8,6 +9,19 @@ from scanner.core.scan_result import Finding, Severity
 from scanner.core.crawler import CrawlResult
 
 
+def _is_loopback(hostname: str | None) -> bool:
+    """True for localhost / 127.0.0.0/8 / ::1 — traffic that never leaves the machine."""
+    if not hostname:
+        return False
+    host = hostname.lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     findings = []
     parsed = urlparse(page.url)
@@ -15,6 +29,28 @@ def test(page: CrawlResult, client: httpx.Client) -> List[Finding]:
     # Only run TLS checks once (from root) and only for HTTPS targets
     if parsed.path not in ("", "/"):
         return []
+
+    if parsed.scheme == "http" and _is_loopback(parsed.hostname):
+        # Loopback traffic can't be intercepted on the network, so this is not a
+        # vulnerability of the scanned instance — but say so, since the same app
+        # deployed elsewhere over plain HTTP would be.
+        findings.append(Finding(
+            title="Application Served Over HTTP (Loopback Only)",
+            severity=Severity.INFO,
+            url=page.url,
+            parameter=None,
+            payload=None,
+            evidence=f"Target is served over HTTP on a loopback address: {page.url}",
+            description=(
+                "The scanned instance uses plain HTTP, but only on a loopback address, so the "
+                "traffic never crosses a network. Make sure deployed instances use HTTPS."
+            ),
+            remediation="Serve deployed instances over HTTPS and redirect HTTP to HTTPS.",
+            cwe="CWE-319",
+            owasp_category="A02:2021 Cryptographic Failures",
+            confidence=1.0,
+        ))
+        return findings
 
     if parsed.scheme == "http":
         findings.append(Finding(
