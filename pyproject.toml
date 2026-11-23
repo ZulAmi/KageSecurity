@@ -100,3 +100,8 @@ include = ["scanner*", "cli*"]
 
 [tool.setuptools.package-data]
 "scanner" = ["**/*.yaml", "**/*.yml", "**/*.html", "**/*.css", "**/*.j2", "_bin/*"]
+
+[tool.ruff.lint]
+# Pin the rule set explicitly. ruff 0.17 widened its default rules, which made CI
+# fail on code that had not changed. Expand this list deliberately, not by upgrade.
+select = ["E4", "E7", "E9", "F"]
