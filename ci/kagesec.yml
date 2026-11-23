@@ -51,7 +51,7 @@ jobs:
 
       - name: Upload JSON report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kagesec-report-${{ github.run_id }}
           path: |
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload PDF report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kagesec-pdf-${{ github.run_id }}
           path: reports/kagesec_report.pdf
