@@ -113,3 +113,8 @@ omit = ["scanner/templates/*"]
 [tool.ruff]
 target-version = "py312"
 extend-exclude = ["tests/vulnerable_app.py"]
+
+[tool.ruff.lint]
+# Pin the rule set explicitly. ruff 0.17 widened its default rules, which made CI
+# fail on code that had not changed. Expand this list deliberately, not by upgrade.
+select = ["E4", "E7", "E9", "F"]
