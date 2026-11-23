@@ -138,14 +138,25 @@ class Template:
 # Loader
 # ---------------------------------------------------------------------------
 
-def load_templates(dirs: list[str] | None = None) -> list[Template]:
-    """Load all YAML templates from one or more directories (recursive)."""
+# Template sections that make KageSec execute code on the *scanner host*, not the
+# target: `code:` runs scripts in a subprocess and `flow:` is evaluated with exec().
+# Like Nuclei's `-code` flag, they are refused unless the user opts in with
+# --allow-code-templates. AI-generated and downloaded templates never opt in.
+_HOST_EXECUTION_KEYS = ("code", "flow", "javascript")
+
+
+def load_templates(dirs: list[str] | None = None, allow_code: bool = False) -> list[Template]:
+    """Load all YAML templates from one or more directories (recursive).
+
+    Templates containing ``code:``/``flow:``/``javascript:`` sections are skipped
+    unless *allow_code* is True.
+    """
     search_dirs = dirs or [_DEFAULT_TEMPLATES_DIR]
     templates = []
     for d in search_dirs:
         for path in glob.glob(os.path.join(d, "**", "*.yaml"), recursive=True):
             try:
-                t = _parse_template(path)
+                t = _parse_template(path, allow_code=allow_code)
                 if t:
                     templates.append(t)
             except Exception:
@@ -153,10 +164,12 @@ def load_templates(dirs: list[str] | None = None) -> list[Template]:
     return templates
 
 
-def _parse_template(path: str) -> Optional[Template]:
+def _parse_template(path: str, allow_code: bool = False) -> Optional[Template]:
     with open(path) as f:
         data = yaml.safe_load(f)
-    if not data:
+    if not data or not isinstance(data, dict):
+        return None
+    if not allow_code and any(k in data for k in _HOST_EXECUTION_KEYS):
         return None
 
     info = data.get("info", {})

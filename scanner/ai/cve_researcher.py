@@ -129,20 +129,44 @@ def _cache_is_fresh(cache_dir: str) -> bool:
         return False
 
 
+# Top-level template keys that would execute code on the scanner host. The model's
+# input includes fingerprints taken from the (possibly hostile) target, so its
+# output is untrusted: only plain HTTP request/matcher templates are accepted.
+_FORBIDDEN_KEYS = ("code", "flow", "javascript", "headless", "network", "dns", "ssl", "websocket")
+
+
+def _is_safe_template(content: str) -> bool:
+    try:
+        import yaml
+        data = yaml.safe_load(content)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if any(k in data for k in _FORBIDDEN_KEYS):
+        return False
+    return bool(data.get("http") or data.get("requests"))
+
+
 def _write_cache(cache_dir: str, fingerprints: dict[str, str], templates: list[dict]) -> None:
     os.makedirs(cache_dir, exist_ok=True)
+    written = 0
     for item in templates:
+        content = item.get("content") if isinstance(item, dict) else None
+        if not isinstance(content, str) or not _is_safe_template(content):
+            continue
         fname = _safe_filename(item.get("filename", "template.yaml"))
         path = os.path.join(cache_dir, fname)
         try:
             with open(path, "w") as f:
-                f.write(item["content"])
+                f.write(content)
+            written += 1
         except Exception:
             pass
     meta = os.path.join(cache_dir, _META_FILE)
     try:
         with open(meta, "w") as f:
-            json.dump({"ts": time.time(), "stack": fingerprints, "count": len(templates)}, f)
+            json.dump({"ts": time.time(), "stack": fingerprints, "count": written}, f)
     except Exception:
         pass
 

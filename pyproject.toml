@@ -62,7 +62,10 @@ dev = [
     "twine>=5.0",
     "psutil>=5.9",
 ]
-claude = [
+mcp = [
+    "mcp>=1.0",
+]
+claude = [  # deprecated alias of [mcp]
     "mcp>=1.0",
 ]
 openai = [

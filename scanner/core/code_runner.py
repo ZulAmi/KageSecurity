@@ -56,6 +56,10 @@ class CodeResult:
 
 
 _ALLOWED_ENGINES = {"python3", "python", "bash", "sh", "node", "nodejs"}
+
+# Environment variables forwarded to code-template subprocesses. Everything else
+# (API keys, tokens, credentials) is withheld.
+_PASSTHROUGH_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT")
 _DEFAULT_TIMEOUT = 30  # seconds
 
 
@@ -80,8 +84,10 @@ def run_code_block(
     if engine not in _ALLOWED_ENGINES:
         return CodeResult(error=f"Unsupported engine: {block.engine}")
 
+    # Never hand the scanner's own environment (AI provider keys, cloud credentials,
+    # CI tokens) to template code — pass only what an interpreter needs to start.
     env = {
-        **os.environ,
+        **{k: os.environ[k] for k in _PASSTHROUGH_ENV if k in os.environ},
         "TARGET": target_url,
         "RESPONSE_BODY": response_body[:65536],
         "RESPONSE_STATUS": str(response_status),

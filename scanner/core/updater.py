@@ -17,10 +17,13 @@ Modes:
 from __future__ import annotations
 
 import os
+import re
 import json
 import threading
 import time
 from typing import Optional
+
+from scanner import __version__
 
 _TEMPLATES_DIR = os.path.expanduser("~/.kagesec/nuclei-templates")
 _VERSION_STAMP = os.path.join(_TEMPLATES_DIR, ".version")
@@ -55,7 +58,7 @@ def get_remote_version() -> Optional[str]:
         import urllib.request
         req = urllib.request.Request(
             _RELEASES_API,
-            headers={"User-Agent": "KageSec/1.0 template-updater"},
+            headers={"User-Agent": f"KageSec/{__version__} template-updater"},
         )
         with urllib.request.urlopen(req, timeout=5) as resp:  # nosec B310
             data = json.loads(resp.read())
@@ -85,13 +88,13 @@ def bootstrap_if_needed(dest_dir: str = _TEMPLATES_DIR) -> None:
         return  # already bootstrapped
 
     print("[*] First run: downloading Nuclei community templates (~30 MB) …")
-    print("    This only happens once. Use --no-templates to skip.\n")
+    print("    This only happens once. Use --skip-templates to skip.\n")
     try:
         remote = get_remote_version() or "latest"
         _download_update(remote, dest_dir)
     except Exception as e:
         print(f"[!] Template bootstrap failed: {e}")
-        print("    Run  kagesec update-templates  to retry, or use  --no-templates  to scan without them.\n")
+        print("    Run  kagesec update-templates  to retry, or use  --skip-templates  to scan without them.\n")
 
 
 def check_for_updates(auto: bool = False, dest_dir: str = _TEMPLATES_DIR) -> None:
@@ -124,42 +127,101 @@ def check_for_updates(auto: bool = False, dest_dir: str = _TEMPLATES_DIR) -> Non
     t.join(timeout=6)
 
 
-def _download_update(version: str, dest_dir: str) -> None:
-    """Download and replace templates (same logic as update-templates command)."""
+# Nuclei top-level protocol keys KageSec cannot run, or will not fetch by default.
+# `code:` / `javascript:` templates execute scripts on the scanner host itself, so
+# they are never downloaded unless the user passes --all (and even then they only
+# run with --allow-code-templates).
+UNSUPPORTED_KEYS = (
+    "flow", "code", "javascript", "network", "dns", "headless", "ssl", "websocket", "whois",
+)
+_UNSUPPORTED_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(k) for k in UNSUPPORTED_KEYS) + r"):", re.MULTILINE
+)
+
+# Top-level directories in nuclei-templates that never contain runnable HTTP templates.
+SKIP_DIRS = frozenset({
+    "dns", "network", "headless", "ssl", "whois", "workflows", ".github",
+    "helpers", "fuzzing", "code", "javascript",
+})
+
+_ARCHIVE_URL = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/{kind}/{ref}.zip"
+
+
+def is_compatible(content: bytes) -> bool:
+    """True if a template only uses top-level protocols KageSec supports."""
+    try:
+        return not _UNSUPPORTED_RE.search(content.decode("utf-8", errors="ignore"))
+    except Exception:
+        return False
+
+
+def download_templates(
+    dest_dir: str = _TEMPLATES_DIR,
+    version: Optional[str] = None,
+    keep_all: bool = False,
+    verbose: bool = True,
+) -> dict:
+    """Download nuclei-templates and extract the compatible YAML files into *dest_dir*.
+
+    The archive is pinned to *version* (a release tag) when known, so the
+    contents always match the version stamp written afterwards. Every member
+    path is checked so a malicious archive cannot write outside *dest_dir*.
+
+    Returns counters: {"saved", "skipped_unsupported", "skipped_dir", "version"}.
+    """
+    import io
     import urllib.request
     import zipfile
-    import io
 
-    _SKIP_DIRS = {"dns", "network", "headless", "ssl", "whois", "workflows", ".github", "helpers", "fuzzing"}
-    _UNSUPPORTED = ("flow:", "network:", "dns:", "headless:", "ssl:", "websocket:", "whois:")
+    from scanner.utils.safe_paths import safe_join
 
-    NUCLEI_ZIP = "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"
-    try:
-        req = urllib.request.Request(NUCLEI_ZIP, headers={"User-Agent": "KageSec/1.0 template-updater"})
-        with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
-            data = resp.read()
+    version = version or get_remote_version()
+    url = (
+        _ARCHIVE_URL.format(kind="tags", ref=version)
+        if version else _ARCHIVE_URL.format(kind="heads", ref="main")
+    )
+    if verbose:
+        print(f"[*] Fetching {url}")
 
-        saved = 0
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for member in zf.namelist():
-                if not member.endswith(".yaml"):
-                    continue
-                parts = member.split("/", 1)
-                rel = parts[1] if len(parts) > 1 else member
-                top = rel.split("/")[0].lower()
-                if top in _SKIP_DIRS:
-                    continue
-                content = zf.read(member)
-                text = content.decode("utf-8", errors="ignore")
-                if any(k in text for k in _UNSUPPORTED):
-                    continue
-                out_path = os.path.join(dest_dir, rel)
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                with open(out_path, "wb") as f:
-                    f.write(content)
-                saved += 1
+    req = urllib.request.Request(url, headers={"User-Agent": "KageSec template-updater"})
+    with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310 — fixed https URL
+        data = resp.read()
 
+    os.makedirs(dest_dir, exist_ok=True)
+    stats = {"saved": 0, "skipped_unsupported": 0, "skipped_dir": 0, "version": version}
+
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for member in zf.namelist():
+            if not member.endswith(".yaml"):
+                continue
+            # Strip the archive's top-level folder (nuclei-templates-<ref>/...)
+            rel = member.split("/", 1)[1] if "/" in member else member
+            if rel.split("/")[0].lower() in SKIP_DIRS:
+                stats["skipped_dir"] += 1
+                continue
+            content = zf.read(member)
+            if not keep_all and not is_compatible(content):
+                stats["skipped_unsupported"] += 1
+                continue
+            try:
+                out_path = safe_join(dest_dir, rel)
+            except ValueError:
+                stats["skipped_unsupported"] += 1
+                continue
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "wb") as f:
+                f.write(content)
+            stats["saved"] += 1
+
+    if version:
         save_local_version(version)
-        print(f"[+] Templates updated to {version} ({saved:,} files)")
+    return stats
+
+
+def _download_update(version: str, dest_dir: str) -> None:
+    """Background auto-update — never raises."""
+    try:
+        stats = download_templates(dest_dir, version=version, verbose=False)
+        print(f"[+] Templates updated to {version} ({stats['saved']:,} files)")
     except Exception as e:
         print(f"[!] Auto-update failed: {e}")
