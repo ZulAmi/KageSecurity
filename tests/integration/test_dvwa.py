@@ -58,42 +58,54 @@ def dvwa_scan():
 def _dvwa_session() -> str:
     """Create DVWA's database, log in as admin, and return an authenticated PHPSESSID.
 
-    Fails loudly if the session does not reach the logged-in home page — otherwise the
-    scan silently crawls nothing but the login form.
+    DVWA sets its session cookie with ``Domain=localhost``, which Python's cookie jar
+    (used by httpx) files under ``.localhost`` but never sends back to ``localhost``.
+    So the session cookie is tracked by hand: read from Set-Cookie, sent as a Cookie
+    header, redirects followed manually (httpx would otherwise rebuild the header
+    from its jar). Fails loudly if login does not reach the logged-in home page —
+    otherwise the scan silently crawls nothing but the login form.
     """
+    import re
+
     import httpx
+
     diag: list[str] = []
+    session = {"PHPSESSID": ""}
 
-    def note(label, resp):
-        diag.append(
-            f"{label}: {resp.status_code} {resp.url} | set-cookie={resp.headers.get_list('set-cookie')}"
-            f" | messages={_messages(resp.text)}"
-        )
+    def request(client, method, path, data=None):
+        url = path
+        for _ in range(5):  # follow redirects ourselves, keeping the session cookie
+            headers = {"Cookie": f"PHPSESSID={session['PHPSESSID']}; security=low"} if session["PHPSESSID"] else {}
+            resp = client.request(method, url, data=data, headers=headers)
+            for raw in resp.headers.get_list("set-cookie"):
+                m = re.match(r"\s*PHPSESSID=([^;]+)", raw)
+                if m:
+                    session["PHPSESSID"] = m.group(1)
+            diag.append(f"{method} {url}: {resp.status_code} → {resp.headers.get('location', '')}"
+                        f" | messages={_messages(resp.text)}")
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                return resp
+            url, method, data = resp.headers["location"], "GET", None
+        return resp
 
-    with httpx.Client(base_url=DVWA_URL, follow_redirects=True, timeout=30) as client:
-        setup = client.get("/setup.php")
-        note("GET setup.php", setup)
-        note("POST setup.php", client.post("/setup.php", data={
+    with httpx.Client(base_url=DVWA_URL + "/", follow_redirects=False, timeout=30) as client:
+        setup = request(client, "GET", "setup.php")
+        request(client, "POST", "setup.php", {
             "create_db": "Create / Reset Database",
             "user_token": _extract_csrf(setup.text),
-        }))
-        login = client.get("/login.php")
-        note("GET login.php", login)
-        note("POST login.php", client.post("/login.php", data={
+        })
+        login = request(client, "GET", "login.php")
+        request(client, "POST", "login.php", {
             "username": "admin",
             "password": "password",
             "Login": "Login",
             "user_token": _extract_csrf(login.text),
-        }))
-        diag.append(f"cookie jar: {[(c.name, c.domain, c.path) for c in client.cookies.jar]}")
-        home = client.get("/index.php")
-        assert "login.php" not in str(home.url), (
-            f"DVWA login failed — landed on {home.url}\n" + "\n".join(diag)
-        )
-        # The jar holds every cookie set during the flow (the final response alone may not).
-        sessions = [c.value for c in client.cookies.jar if c.name == "PHPSESSID"]
-        assert sessions, "No PHPSESSID cookie after login"
-        return sessions[-1]
+        })
+        home = request(client, "GET", "index.php")
+
+    logged_in = home.status_code == 200 and "logout.php" in home.text
+    assert logged_in and session["PHPSESSID"], "DVWA login failed:\n" + "\n".join(diag)
+    return session["PHPSESSID"]
 
 
 def _messages(html: str) -> list[str]:
