@@ -62,25 +62,45 @@ def _dvwa_session() -> str:
     scan silently crawls nothing but the login form.
     """
     import httpx
+    diag: list[str] = []
+
+    def note(label, resp):
+        diag.append(
+            f"{label}: {resp.status_code} {resp.url} | set-cookie={resp.headers.get_list('set-cookie')}"
+            f" | messages={_messages(resp.text)}"
+        )
+
     with httpx.Client(base_url=DVWA_URL, follow_redirects=True, timeout=30) as client:
         setup = client.get("/setup.php")
-        client.post("/setup.php", data={
+        note("GET setup.php", setup)
+        note("POST setup.php", client.post("/setup.php", data={
             "create_db": "Create / Reset Database",
             "user_token": _extract_csrf(setup.text),
-        })
+        }))
         login = client.get("/login.php")
-        client.post("/login.php", data={
+        note("GET login.php", login)
+        note("POST login.php", client.post("/login.php", data={
             "username": "admin",
             "password": "password",
             "Login": "Login",
             "user_token": _extract_csrf(login.text),
-        })
+        }))
+        diag.append(f"cookie jar: {[(c.name, c.domain, c.path) for c in client.cookies.jar]}")
         home = client.get("/index.php")
-        assert "login.php" not in str(home.url), f"DVWA login failed — landed on {home.url}"
+        assert "login.php" not in str(home.url), (
+            f"DVWA login failed — landed on {home.url}\n" + "\n".join(diag)
+        )
         # The jar holds every cookie set during the flow (the final response alone may not).
         sessions = [c.value for c in client.cookies.jar if c.name == "PHPSESSID"]
         assert sessions, "No PHPSESSID cookie after login"
         return sessions[-1]
+
+
+def _messages(html: str) -> list[str]:
+    """DVWA's on-page status messages (login failures, setup results)."""
+    import re
+    found = re.findall(r'<div class=["\']message["\']>(.*?)</div>', html, re.S)
+    return [re.sub(r"<[^>]+>", " ", m).strip()[:200] for m in found]
 
 
 def _extract_csrf(html: str) -> str:
