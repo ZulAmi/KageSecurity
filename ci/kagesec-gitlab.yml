@@ -11,17 +11,17 @@ kagesec-scan:
     - pip install "kagesec[browser]"
     - playwright install chromium --with-deps
   script:
-    - kagesec scan "$TARGET"
+    - kagesec scan
         --output all
+        --report-dir reports
         --fail-on "$FAIL_ON"
         --compliance gdpr hipaa
         --no-browser
+        -- "$TARGET"
   artifacts:
     when: always
     paths:
-      - kagesec_report.json
-      - kagesec_report.md
-      - kagesec_report.pdf
+      - reports/
     expire_in: 30 days
   allow_failure: false
   rules:

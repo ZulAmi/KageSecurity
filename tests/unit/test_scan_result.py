@@ -1,5 +1,4 @@
 """Unit tests for scanner/core/scan_result.py"""
-import pytest
 from scanner.core.scan_result import Finding, ScanResult, Severity, _normalise_url
 
 

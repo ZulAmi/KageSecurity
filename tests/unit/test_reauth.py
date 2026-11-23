@@ -1,6 +1,5 @@
 """Unit tests for _reauth_if_needed() in scanner/core/engine.py."""
 import types
-import pytest
 
 
 def _make_config(login_url="https://app.example.com/login", **kwargs):

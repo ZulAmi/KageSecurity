@@ -1,9 +1,10 @@
 apiVersion: v2
 name: kagesec
-description: AI-powered DAST scanner — run security scans as Kubernetes Jobs
+description: AI-assisted DAST scanner — run security scans as Kubernetes Jobs
 type: application
-version: 0.1.0
-appVersion: "1.0.0"
+# Both versions are overwritten from the git tag by the release workflow.
+version: 0.3.2
+appVersion: "0.3.2"
 keywords:
   - security
   - dast

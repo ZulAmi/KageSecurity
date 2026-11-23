@@ -1,5 +1,5 @@
 name: KageSec DAST Scanner
-description: AI-powered DAST scan — finds OWASP Top 10 vulnerabilities in your web app on every PR.
+description: AI-assisted DAST scan — finds OWASP Top 10 vulnerabilities in a running web app.
 author: KageSec
 
 branding:
@@ -8,10 +8,10 @@ branding:
 
 inputs:
   target:
-    description: Target URL to scan (e.g. https://staging.example.com)
+    description: Target URL to scan (e.g. https://staging.example.com). Only scan systems you are authorised to test.
     required: true
   api-key:
-    description: Anthropic API key for AI verification and CVE research
+    description: Anthropic API key for AI verification (optional)
     required: false
     default: ""
   depth:
@@ -27,11 +27,11 @@ inputs:
     required: false
     default: "sarif"
   fail-on:
-    description: "Exit with code 1 if findings at this severity or above exist: critical | high | medium | low"
+    description: "Fail the step if findings at this severity or above exist: critical | high | medium | low | info. Empty = never fail."
     required: false
     default: "high"
   passive:
-    description: "Passive mode — no injection payloads (safe for production)"
+    description: "Passive mode — no injection payloads (safer for production)"
     required: false
     default: "false"
   modules:
@@ -43,33 +43,74 @@ inputs:
     required: false
     default: ""
   no-ai:
-    description: "Disable AI verification (faster, no API key needed)"
+    description: "Disable AI verification (no API key needed, nothing sent to an AI provider)"
     required: false
     default: "false"
+  browser:
+    description: "Use the headless-browser crawler for JavaScript-heavy apps (adds ~1 minute to install Chromium)"
+    required: false
+    default: "true"
+  report-dir:
+    description: Directory to write reports into
+    required: false
+    default: "reports"
 
 outputs:
   report-path:
-    description: Path to the generated SARIF report
+    description: Path to the generated SARIF report (or JSON report when SARIF was not requested)
+    value: ${{ steps.scan.outputs.report-path }}
   findings-count:
-    description: Total number of findings
+    description: Number of findings (excluding ones AI marked as false positives)
+    value: ${{ steps.scan.outputs.findings-count }}
 
 runs:
-  using: docker
-  image: Dockerfile
-  args:
-    - scan
-    - ${{ inputs.target }}
-    - --depth
-    - ${{ inputs.depth }}
-    - --max-pages
-    - ${{ inputs.max-pages }}
-    - --output
-    - ${{ inputs.output }}
-    - --fail-on
-    - ${{ inputs.fail-on }}
-  env:
-    ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-    KAGESEC_PASSIVE: ${{ inputs.passive }}
-    KAGESEC_NO_AI: ${{ inputs.no-ai }}
-    KAGESEC_MODULES: ${{ inputs.modules }}
-    KAGESEC_EXCLUDE: ${{ inputs.exclude }}
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/engine/go.mod
+        cache: false
+
+    - name: Build the template engine
+      shell: bash
+      working-directory: ${{ github.action_path }}/engine
+      run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../scanner/_bin/kagesec-engine .
+
+    - name: Install KageSec (from this action's own source, so versions always match)
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BROWSER: ${{ inputs.browser }}
+      run: |
+        if [ "$BROWSER" = "true" ]; then
+          python -m pip install --quiet "${ACTION_PATH}[browser]"
+          python -m playwright install --with-deps chromium
+        else
+          python -m pip install --quiet "${ACTION_PATH}"
+        fi
+
+    - name: Run KageSec
+      id: scan
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        KAGESEC_PASSIVE: ${{ inputs.passive }}
+        KAGESEC_NO_AI: ${{ inputs.no-ai }}
+        KAGESEC_MODULES: ${{ inputs.modules }}
+        KAGESEC_EXCLUDE: ${{ inputs.exclude }}
+        TARGET: ${{ inputs.target }}
+        DEPTH: ${{ inputs.depth }}
+        MAX_PAGES: ${{ inputs.max-pages }}
+        OUTPUT: ${{ inputs.output }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        BROWSER: ${{ inputs.browser }}
+        REPORT_DIR: ${{ inputs.report-dir }}
+      run: |
+        args=(scan --depth "$DEPTH" --max-pages "$MAX_PAGES" --output "$OUTPUT" --report-dir "$REPORT_DIR")
+        [ -n "$FAIL_ON" ] && args+=(--fail-on "$FAIL_ON")
+        [ "$BROWSER" = "true" ] || args+=(--no-browser)
+        kagesec "${args[@]}" -- "$TARGET"

@@ -19,11 +19,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Run KageSec DAST Scan
+        id: kagesec
         uses: ./                           # use action.yml from this repo
-        # Or pin a release: uses: kagesec/kagesec@v1
+        # From another repo, pin a release tag: uses: ZulAmi/KageSecurity@vX.Y.Z
         with:
           target: ${{ github.event.inputs.target || vars.STAGING_URL }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -35,7 +36,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && steps.kagesec.outputs.report-path != ''
         with:
-          sarif_file: kagesec_report.sarif
+          sarif_file: ${{ steps.kagesec.outputs.report-path }}
           category: kagesec-dast

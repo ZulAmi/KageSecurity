@@ -1,5 +1,4 @@
 """Unit tests for scanner/core/config.py"""
-import pytest
 from scanner.core.config import ScanConfig, LoginFlow
 
 

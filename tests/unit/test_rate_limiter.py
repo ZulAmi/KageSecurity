@@ -1,7 +1,6 @@
 """Unit tests for scanner/core/rate_limiter.py"""
 import time
 import threading
-import pytest
 from scanner.core.rate_limiter import RateLimiter, RateLimitedClient
 
 

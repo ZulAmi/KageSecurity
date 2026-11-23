@@ -1,10 +1,10 @@
 image:
   repository: ghcr.io/zulami/kagesecurity
-  tag: latest
-  pullPolicy: Always
+  tag: ""                 # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
 
 scan:
-  target: "https://example.com"
+  target: "https://example.com"   # only scan systems you are authorised to test
   depth: 3
   maxPages: 50
   output: sarif
@@ -17,16 +17,21 @@ scan:
   exclude: []         # URL glob patterns to skip
   compliance: []      # iso27001 hipaa gdpr appi
 
+# Secrets. Values set here are stored in a Kubernetes Secret created by the chart and
+# passed to the scanner as environment variables (never as command-line arguments).
+# To manage the Secret yourself, set existingSecret to its name; it may contain any of
+# the keys ANTHROPIC_API_KEY, NVD_API_KEY, KAGESEC_AUTH_BEARER, KAGESEC_AUTH_COOKIE.
+existingSecret: ""
+anthropicApiKey: ""
+nvdApiKey: ""
 auth:
   bearer: ""
-  cookie: ""
+  cookie: ""          # NAME=VALUE
 
 proxy: ""
 
-anthropicApiKey: ""   # set via --set or a secret ref
-nvdApiKey: ""
-
-# Store reports in a PVC mounted at /reports
+# Store reports in a PVC mounted at mountPath. When disabled, reports go to an
+# emptyDir and are lost when the pod is removed.
 reports:
   enabled: false
   storageClass: ""
@@ -44,6 +49,20 @@ job:
     limits:
       cpu: 2
       memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
 
 serviceAccount:
   create: true
