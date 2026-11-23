@@ -9,7 +9,7 @@ COPY engine/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/kagesec-engine .
 
 # ---- 2. Python wheel (bundles the engine binary) -------------------------------
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.14-slim-bookworm AS build
 WORKDIR /src
 RUN pip install --no-cache-dir build
 COPY pyproject.toml setup.py README.md LICENSE ./
@@ -19,7 +19,7 @@ COPY --from=engine /out/kagesec-engine scanner/_bin/kagesec-engine
 RUN python -m build --wheel --outdir /dist
 
 # ---- 3. Runtime ----------------------------------------------------------------
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 LABEL org.opencontainers.image.title="KageSec" \
       org.opencontainers.image.description="AI-assisted DAST scanner" \
