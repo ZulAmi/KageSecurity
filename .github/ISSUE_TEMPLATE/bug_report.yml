@@ -1,0 +1,45 @@
+name: Bug report
+description: KageSec crashed, hung, or did something it should not have.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: Remove tokens, cookies and private hostnames.
+      render: shell
+      placeholder: kagesec scan https://staging.example.com --no-browser --modules xss
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / traceback
+      description: Run with `-v` if you can. The JSON report's `errors` list is useful too.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: KageSec version
+      description: Output of `pip show kagesec | grep Version`
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is KageSec installed?
+      options: [pip, Docker image, GitHub Action, from source (git clone)]
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Python version
+      placeholder: macOS 15 / Python 3.12

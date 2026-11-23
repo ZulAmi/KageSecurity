@@ -1,5 +1,11 @@
 # KageSec
 
+[![CI](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ZulAmi/KageSecurity/actions/workflows/codeql.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/codeql.yml)
+[![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
+[![Python](https://img.shields.io/pypi/pyversions/kagesec)](https://pypi.org/project/kagesec/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and uses AI to verify whether the findings are real — so your report isn't 200 false positives that someone has to triage at 11pm.
 
 Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then got really into AI and AppSec workflows.
@@ -186,7 +192,7 @@ The `kagesec-engine` Go binary is bundled in the wheel — no manual build step 
 pip install "kagesec[browser]"              # Playwright headless browser (you probably want this)
 pip install "kagesec[pdf]"                  # PDF reports
 pip install "kagesec[dns]"                  # DNSSEC + subdomain enumeration
-pip install "kagesec[claude]"               # MCP server for Claude Code integration
+pip install "kagesec[mcp]"                  # MCP server for Claude Code integration
 pip install "kagesec[openai]"               # OpenAI GPT-4o provider
 pip install "kagesec[gemini]"               # Google Gemini provider
 pip install "kagesec[mistral]"              # Mistral Large provider
@@ -434,7 +440,7 @@ kagesec retest "OS Command" --report reports/kagesec_report.json
 kagesec retest "XSS" --report reports/kagesec_report.json
 ```
 
-The retest first tries to replay the exact HTTP request from the `poc_curl` field (< 2s). If that's inconclusive, it re-runs the relevant detection module. Reports `STILL PRESENT` or `RESOLVED`.
+The retest first tries to replay the exact HTTP request from the `poc_curl` field (< 2s). If that's inconclusive, it re-runs the module that produced the finding. Exit codes: `0` not reproduced, `1` still present, `2` inconclusive.
 
 ---
 
@@ -483,25 +489,24 @@ Custom workflows live in `~/.kagesec/workflows/` or can be referenced by file pa
 
 ### Option 1 — MCP Server
 
-Add to your project's `.mcp.json`:
+Install with `pip install "kagesec[mcp]"`, then add to your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "kagesec": {
-      "command": "python3",
-      "args": ["-m", "scanner.mcp_server"],
-      "cwd": "/path/to/KageSec"
+      "command": "kagesec",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-Now Claude can call `kagesec_scan("https://your-app.com")` directly inside a conversation.
+Now Claude can call `kagesec_scan("https://your-app.com")` directly inside a conversation. The MCP server only accepts http(s) URLs and known module names, writes each scan to its own report directory, and only reads reports from there.
 
-### Option 2 — PostToolUse Hook
+### Option 2 — Post-deploy hook (opt-in)
 
-The `.claude/settings.json` and `.claude/hooks/post_deploy_scan.py` files are already included. When Claude runs a deployment command, the hook extracts the live URL and kicks off a background scan automatically.
+[`examples/claude-code-hook/`](examples/claude-code-hook/) contains a PostToolUse hook that starts a background scan when Claude runs a deployment command. It only scans hosts you list in `KAGESEC_HOOK_ALLOWED_HOSTS` and runs in passive mode unless you set `KAGESEC_HOOK_ACTIVE=1`.
 
 ---
 
@@ -693,10 +698,9 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: KageSec Security Scan
-        uses: ZulAmi/KageSecurity@main
+        id: kagesec
+        uses: ZulAmi/KageSecurity@main   # pin a release tag in real pipelines
         with:
           target: https://staging.example.com
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -705,10 +709,12 @@ jobs:
 
       - name: Upload to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && steps.kagesec.outputs.report-path != ''
         with:
-          sarif_file: reports/kagesec_report.sarif
+          sarif_file: ${{ steps.kagesec.outputs.report-path }}
 ```
+
+The action installs KageSec from its own source (no Docker build) and exposes two outputs: `report-path` and `findings-count`.
 
 Full examples in the [`ci/`](ci/) folder.
 
@@ -718,7 +724,7 @@ Full examples in the [`ci/`](ci/) folder.
 kagesec scan https://target.example.com --fail-on high
 ```
 
-Exit code `1` if findings at or above the specified severity are found; `0` if clean.
+Exit code `1` if findings at or above the specified severity are found (`info` is accepted too); `0` if clean. Findings the AI classified as false positives don't count.
 
 ### GitHub Actions environment variables
 
@@ -733,7 +739,7 @@ The `action.yml` composite action sets `KAGESEC_*` variables that override CLI f
 
 ### Delta Scanning
 
-KageSec remembers which pages it already scanned. Unchanged pages get skipped on repeat runs — CI scans get faster over time. Use `--full` to force a complete rescan.
+Pass `--delta` to skip pages whose content hasn't changed since the last scan of the same target — useful for fast PR scans. Unchanged pages are not re-tested, so their earlier findings stay open (they are never reported as resolved). Full scans are the default.
 
 ---
 
@@ -823,7 +829,8 @@ Supports Slack, Teams, Discord, and generic JSON webhooks.
 | `suppress`                  | Manage false-positive suppression rules               |
 | `diff <baseline> <current>` | Compare two reports, fail on new findings             |
 | `issues`                    | Export to Jira or GitHub Issues                       |
-| `serve`                     | Start HTTP API server (`0.0.0.0:8080`)                |
+| `serve`                     | Start the HTTP API server (`127.0.0.1:8080`, bearer-token auth) |
+| `mcp`                       | Run the MCP server for Claude Code / MCP clients      |
 | `export --scan-id ID`       | Bundle a checkpoint + report into a zip               |
 | `import-scan <file>`        | Import a previously exported scan                     |
 | `workflows`                 | List available scan workflows                         |
@@ -857,7 +864,10 @@ Supports Slack, Teams, Discord, and generic JSON webhooks.
 | `--profile NAME`              | —       | Apply a scan preset (quick / full / api / passive / stealth) |
 | `--workflow NAME_OR_FILE`     | —       | Run a YAML workflow (built-in: quick-web, wordpress)         |
 | `--resume ID`                 | —       | Resume an interrupted scan                                   |
-| `--full`                      | off     | Force full rescan (skip delta optimization)                  |
+| `--delta`                     | off     | Only test pages that changed since the last scan             |
+| `--full`                      | on      | Full scan (the default; overrides `--delta` from a profile)  |
+| `--report-dir DIR`            | reports | Where reports are written                                    |
+| `--allow-code-templates`      | off     | Allow `code:`/`flow:` templates — they run scripts on *this* machine |
 | `--max-time MIN`              | 0       | Hard time limit in minutes                                   |
 | `-H NAME:VALUE`               | —       | Custom HTTP header on every request (repeatable)             |
 | `--user-agent UA`             | —       | Custom User-Agent string                                     |
@@ -866,7 +876,7 @@ Supports Slack, Teams, Discord, and generic JSON webhooks.
 | `--timeout SECONDS`           | 10      | Per-request HTTP timeout                                     |
 | `--retries N`                 | 0       | Retry failed HTTP requests N times                           |
 | `--concurrency N`             | 8       | Module threads per page                                      |
-| `--rate-limit RPS`            | 10      | HTTP requests per second                                     |
+| `--rate-limit RPS`            | auto    | HTTP requests per second (default 3 × concurrency, 10–300)   |
 | `--proxy URL`                 | —       | HTTP/HTTPS proxy URL                                         |
 | `--include PATTERN`           | —       | Only crawl URLs matching these glob patterns (repeatable)    |
 | `--exclude PATTERN`           | —       | Skip URLs matching these glob patterns (repeatable)          |
@@ -904,6 +914,9 @@ kagesec schedule run
 | `MISTRAL_API_KEY`   | Alternative AI  | Mistral Large as AI provider                                              |
 | `OLLAMA_URL`        | Optional        | Ollama base URL (default: `http://localhost:11434`) — free local AI       |
 | `NVD_API_KEY`       | Optional        | NVD API key for faster CVE enrichment                                     |
+| `KAGESEC_AUTH_BEARER` | Optional      | Bearer token for authenticated scans (keeps it out of shell history)      |
+| `KAGESEC_AUTH_COOKIE` | Optional      | Session cookie `NAME=VALUE` for authenticated scans                       |
+| `KAGESEC_API_TOKEN` | For `serve`     | Bearer token clients must send to the API server                          |
 
 No AI key? KageSec runs all 61 modules and produces full reports without one. You just won't get the AI triage layer or the narrative Markdown report.
 
@@ -917,7 +930,7 @@ No AI key? KageSec runs all 61 modules and produces full reports without one. Yo
 - **Browser:** Playwright (Chromium)
 - **AI:** Claude, GPT-4o, Gemini, Mistral, or Ollama (auto-detected)
 - **Templates:** Nuclei-compatible YAML (`gopkg.in/yaml.v3`)
-- **Reports:** Jinja2, WeasyPrint (PDF), SARIF 2.1.0
+- **Reports:** Jinja2, Playwright Chromium (PDF), SARIF 2.1.0
 - **State store:** SQLite (`~/.kagesec/findings.db`) — finding history, trending, states
 
 ---
@@ -943,10 +956,8 @@ kagesec/
 │   ├── runner/engine.go    # Goroutine pool, work distribution
 │   ├── output/streamer.go  # JSON Lines real-time output
 │   └── go.mod
-├── .claude/
-│   ├── settings.json       # Claude Code hooks config
-│   └── hooks/
-│       └── post_deploy_scan.py   # Auto-scan on deployment
+├── examples/
+│   └── claude-code-hook/   # Opt-in post-deploy scan hook for Claude Code
 ├── tests/
 │   ├── unit/
 │   └── integration/        # DVWA, WebGoat, OWASP Juice Shop
@@ -957,15 +968,26 @@ kagesec/
 
 ---
 
+## Documentation
+
+Deeper guides live in [`docs/`](docs/):
+[architecture](docs/architecture.md) ·
+[modules reference](docs/modules-reference.md) ·
+[AI providers](docs/ai-providers.md) ·
+[CI/CD integration](docs/ci-cd-integration.md) ·
+[compliance mapping](docs/compliance.md) ·
+[deployment & releases](docs/deployment.md) ·
+[changelog](CHANGELOG.md)
+
+---
+
 ## Contributing
 
 This project is, and probably always will be, a work in progress. There's always another module to write, another CVE to template, another compliance control to map, or another edge case in a web framework that breaks everything in a fun new way.
 
-If you want to work on it — security researcher, developer who found a bug, someone who wants to add a module, or someone who paid too much for a PTAA and wants to commiserate — reach out.
+If you want to work on it — security researcher, developer who found a bug, someone who wants to add a module, or someone who paid too much for a PTAA and wants to commiserate — start with [CONTRIBUTING.md](CONTRIBUTING.md). False positives and missed vulnerabilities have their own [issue templates](https://github.com/ZulAmi/KageSecurity/issues/new/choose); they're the most useful reports you can send.
 
-📧 **zulhilmirahmat@protonmail.com**
-
-Pull requests, issues, ideas, war stories about enterprise security vendors — all welcome.
+Found a vulnerability in KageSec itself? Please report it privately — see [SECURITY.md](SECURITY.md).
 
 ---
 

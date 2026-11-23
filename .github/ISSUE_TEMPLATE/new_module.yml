@@ -1,0 +1,27 @@
+name: New check / module idea
+description: Propose a new vulnerability check or an improvement to an existing one.
+labels: [enhancement, detection]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should KageSec detect?
+      description: Include the vulnerability class, CWE if known, and links to write-ups.
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How can it be detected reliably?
+      description: Requests to send and the response signal that proves the issue. How do we avoid false positives?
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Is the check safe to run against production?
+      options: [Yes — read-only, No — sends state-changing or heavy requests, Not sure]
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this myself
