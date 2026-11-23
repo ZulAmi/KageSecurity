@@ -23,7 +23,7 @@ KageSec is a dual-runtime DAST scanner: a Python orchestration layer drives the 
                    │                         │
           ┌────────▼─────────────────────────▼──────────┐
           │              Module Runner                   │
-          │         61 modules × 8 threads per page      │
+          │         64 modules × 8 threads per page      │
           │  scanner/modules/*.py  (Python)              │
           └────────────────────┬────────────────────────┘
                                │

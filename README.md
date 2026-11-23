@@ -4,9 +4,9 @@
 [![CodeQL](https://github.com/ZulAmi/KageSecurity/actions/workflows/codeql.yml/badge.svg)](https://github.com/ZulAmi/KageSecurity/actions/workflows/codeql.yml)
 [![PyPI](https://img.shields.io/pypi/v/kagesec)](https://pypi.org/project/kagesec/)
 [![Python](https://img.shields.io/pypi/pyversions/kagesec)](https://pypi.org/project/kagesec/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/ZulAmi/KageSecurity/blob/main/LICENSE)
 
-**A security scanner that actually finds things.** KageSec crawls your web app, throws 61 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and uses AI to verify whether the findings are real — so your report isn't 200 false positives that someone has to triage at 11pm.
+**A security scanner that actually finds things.** KageSec crawls your web app, throws 64 vulnerability modules at it, runs 7,400+ CVE templates via a purpose-built Go engine, and uses AI to verify whether the findings are real — so your report isn't 200 false positives that someone has to triage at 11pm.
 
 Think of it as Nuclei and ZAP had a baby, the baby learned Python and Go, and then got really into AI and AppSec workflows.
 
@@ -161,7 +161,7 @@ The `.claude/` folder includes a hook that fires after any deployment Bash comma
 
 ## What it does
 
-- **61 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, there's a module for it.
+- **64 vulnerability modules** — XSS, SQLi, SSRF, SSTI, XXE, deserialization, request smuggling, prototype pollution, JWT attacks, and more. If it's in the OWASP Top 10, there's a module for it.
 - **Go template engine** — `kagesec-engine` runs 7,417 HTTP-compatible Nuclei templates with 50 goroutines, real-time streaming, and confidence scoring. ~2 minutes for 7,417 templates. With an AI key, Claude narrows templates to 80-200 relevant ones for your stack.
 - **5 AI providers** — Anthropic Claude, OpenAI GPT-4o, Google Gemini, Mistral, and Ollama (local, no key required). Auto-detected from environment variables. If none are configured, an interactive menu prompts you at startup (skipped in CI/non-TTY environments).
 - **Zero false positives in parameter discovery** — canary-based comparison baseline matches the approach used by Burp Param Miner and Arjun. Two-tier wordlist (security-critical vs medium-confidence) with per-param attempt tracking.
@@ -297,7 +297,7 @@ Override the model explicitly with `--ai-model`:
 kagesec scan https://target.example.com --ai-model gemini-1.5-pro
 ```
 
-If no AI provider is available, the scan still runs all 61 modules and produces full findings — you just won't get the AI triage layer or the narrative Markdown report.
+If no AI provider is available, the scan still runs all 64 modules and produces full findings — you just won't get the AI triage layer or the narrative Markdown report.
 
 AI verification batches findings in groups of 10, classifies each as `true_positive`, `false_positive`, or `needs_manual_review`, and scores exploitability and business impact.
 
@@ -506,7 +506,7 @@ Now Claude can call `kagesec_scan("https://your-app.com")` directly inside a con
 
 ### Option 2 — Post-deploy hook (opt-in)
 
-[`examples/claude-code-hook/`](examples/claude-code-hook/) contains a PostToolUse hook that starts a background scan when Claude runs a deployment command. It only scans hosts you list in `KAGESEC_HOOK_ALLOWED_HOSTS` and runs in passive mode unless you set `KAGESEC_HOOK_ACTIVE=1`.
+[`examples/claude-code-hook/`](https://github.com/ZulAmi/KageSecurity/tree/main/examples/claude-code-hook/) contains a PostToolUse hook that starts a background scan when Claude runs a deployment command. It only scans hosts you list in `KAGESEC_HOOK_ALLOWED_HOSTS` and runs in passive mode unless you set `KAGESEC_HOOK_ACTIVE=1`.
 
 ---
 
@@ -716,7 +716,7 @@ jobs:
 
 The action installs KageSec from its own source (no Docker build) and exposes two outputs: `report-path` and `findings-count`.
 
-Full examples in the [`ci/`](ci/) folder.
+Full examples in the [`ci/`](https://github.com/ZulAmi/KageSecurity/tree/main/ci/) folder.
 
 ### Break the build on real findings
 
@@ -918,7 +918,7 @@ kagesec schedule run
 | `KAGESEC_AUTH_COOKIE` | Optional      | Session cookie `NAME=VALUE` for authenticated scans                       |
 | `KAGESEC_API_TOKEN` | For `serve`     | Bearer token clients must send to the API server                          |
 
-No AI key? KageSec runs all 61 modules and produces full reports without one. You just won't get the AI triage layer or the narrative Markdown report.
+No AI key? KageSec runs all 64 modules and produces full reports without one. You just won't get the AI triage layer or the narrative Markdown report.
 
 ---
 
@@ -970,14 +970,14 @@ kagesec/
 
 ## Documentation
 
-Deeper guides live in [`docs/`](docs/):
-[architecture](docs/architecture.md) ·
-[modules reference](docs/modules-reference.md) ·
-[AI providers](docs/ai-providers.md) ·
-[CI/CD integration](docs/ci-cd-integration.md) ·
-[compliance mapping](docs/compliance.md) ·
-[deployment & releases](docs/deployment.md) ·
-[changelog](CHANGELOG.md)
+Deeper guides live in [`docs/`](https://github.com/ZulAmi/KageSecurity/tree/main/docs/):
+[architecture](https://github.com/ZulAmi/KageSecurity/blob/main/docs/architecture.md) ·
+[modules reference](https://github.com/ZulAmi/KageSecurity/blob/main/docs/modules-reference.md) ·
+[AI providers](https://github.com/ZulAmi/KageSecurity/blob/main/docs/ai-providers.md) ·
+[CI/CD integration](https://github.com/ZulAmi/KageSecurity/blob/main/docs/ci-cd-integration.md) ·
+[compliance mapping](https://github.com/ZulAmi/KageSecurity/blob/main/docs/compliance.md) ·
+[deployment & releases](https://github.com/ZulAmi/KageSecurity/blob/main/docs/deployment.md) ·
+[changelog](https://github.com/ZulAmi/KageSecurity/blob/main/CHANGELOG.md)
 
 ---
 
@@ -985,9 +985,9 @@ Deeper guides live in [`docs/`](docs/):
 
 This project is, and probably always will be, a work in progress. There's always another module to write, another CVE to template, another compliance control to map, or another edge case in a web framework that breaks everything in a fun new way.
 
-If you want to work on it — security researcher, developer who found a bug, someone who wants to add a module, or someone who paid too much for a PTAA and wants to commiserate — start with [CONTRIBUTING.md](CONTRIBUTING.md). False positives and missed vulnerabilities have their own [issue templates](https://github.com/ZulAmi/KageSecurity/issues/new/choose); they're the most useful reports you can send.
+If you want to work on it — security researcher, developer who found a bug, someone who wants to add a module, or someone who paid too much for a PTAA and wants to commiserate — start with [CONTRIBUTING.md](https://github.com/ZulAmi/KageSecurity/blob/main/CONTRIBUTING.md). False positives and missed vulnerabilities have their own [issue templates](https://github.com/ZulAmi/KageSecurity/issues/new/choose); they're the most useful reports you can send.
 
-Found a vulnerability in KageSec itself? Please report it privately — see [SECURITY.md](SECURITY.md).
+Found a vulnerability in KageSec itself? Please report it privately — see [SECURITY.md](https://github.com/ZulAmi/KageSecurity/blob/main/SECURITY.md).
 
 ---
 

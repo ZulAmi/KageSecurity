@@ -120,3 +120,32 @@ jobs:
       - uses: azure/setup-helm@v5
       - run: helm lint helm/kagesec
       - run: helm template ci helm/kagesec --set reports.enabled=true --set anthropicApiKey=x > /dev/null
+
+  docker:
+    name: Docker image (build + smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      # amd64 only and never pushed — catches Dockerfile breakage before a release does
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: kagesec:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run --rm kagesec:ci --help > /dev/null
+          test "$(docker run --rm --entrypoint id kagesec:ci -u)" = "10001"
+          docker run --rm --entrypoint python kagesec:ci -c "
+          import os, scanner
+          engine = os.path.join(os.path.dirname(scanner.__file__), '_bin', 'kagesec-engine')
+          assert os.access(engine, os.X_OK), f'engine missing or not executable: {engine}'
+          print('engine ok:', engine)
+          "

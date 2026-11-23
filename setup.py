@@ -1,7 +1,10 @@
 from setuptools import setup
 
 try:
-    from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+    try:
+        from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
+    except ImportError:  # setuptools < 70.1
+        from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
     class bdist_wheel(_bdist_wheel):
         def finalize_options(self):

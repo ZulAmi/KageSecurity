@@ -1,6 +1,6 @@
 # AI Providers
 
-KageSec supports 5 AI providers. No provider is required — all 61 modules run and produce full findings without one. AI adds a verification and triage layer on top.
+KageSec supports 5 AI providers. No provider is required — all 64 modules run and produce full findings without one. AI adds a verification and triage layer on top.
 
 ---
 

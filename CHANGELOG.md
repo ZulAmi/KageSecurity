@@ -6,6 +6,8 @@ All notable changes to KageSec are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
 ### Security
 - `kagesec serve` now binds to `127.0.0.1` by default and requires a bearer token
   (`--token` or `KAGESEC_API_TOKEN`; a random one is printed if neither is set).
@@ -77,6 +79,28 @@ All notable changes to KageSec are documented here. The format follows
 - New `kagesec mcp` command and `[mcp]` extra (`[claude]` remains as an alias).
 - Version strings in the User-Agent, SARIF output and API come from the installed
   package version.
+
+### Deployment and packaging
+- **Docker:** the image now includes the Go template engine, runs as a non-root user
+  (UID 10001), and uses `/work` as its working directory. Mount reports at
+  `/work/reports` (previously `/app/reports`); add `--user "$(id -u):$(id -g)"` when
+  bind-mounting on Linux. Images are published for linux/amd64 and linux/arm64.
+- **GitHub Action:** now a composite action that installs KageSec from the action's own
+  source instead of building a Docker image on every run. New `browser` and
+  `report-dir` inputs; the `report-path` and `findings-count` outputs work.
+- **Helm:** API keys and auth tokens are passed from a Secret (created from the
+  existing values, or `existingSecret`) instead of plain env values and arguments; the
+  missing reports PersistentVolumeClaim is added; the Job runs non-root with a
+  read-only root filesystem. The image tag defaults to the chart's appVersion.
+- **PyPI:** releases now include a source distribution and a Linux aarch64 wheel.
+- `KAGESEC_AUTH_BEARER`, `KAGESEC_AUTH_COOKIE` and `NVD_API_KEY` can be set as
+  environment variables instead of command-line flags.
+- License metadata uses an SPDX expression (`license = "MIT"`); building from source
+  needs setuptools 77 or newer.
+
+### Dependencies
+- Docker build image: Go 1.27. CI and the Action use `actions/setup-python@v7`,
+  `actions/setup-go@v7` and `docker/setup-qemu-action@v4`.
 
 ## Earlier releases
 

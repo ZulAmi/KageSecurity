@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-KageSec is an AI-powered DAST (dynamic application security testing) scanner. It crawls web applications, runs 61 vulnerability modules, executes 7,400+ Nuclei-compatible CVE templates via a Go engine, and uses AI to verify findings and eliminate false positives.
+KageSec is an AI-powered DAST (dynamic application security testing) scanner. It crawls web applications, runs 64 vulnerability modules, executes 7,400+ Nuclei-compatible CVE templates via a Go engine, and uses AI to verify findings and eliminate false positives.
 
 **Stack:** Python 3.12+, Go 1.22+, Playwright (browser), SQLite (state), httpx (HTTP), BeautifulSoup (HTML parsing), Jinja2 (reports)
 
@@ -54,7 +54,7 @@ KageSecurity/
 │   │   ├── template_runner.py # YAML template execution
 │   │   ├── js_extractor.py  # Inline script extraction (uses BeautifulSoup)
 │   │   └── prioritizer.py   # CVSS + AI + state scoring for "Fix These First"
-│   ├── modules/             # 61 vulnerability detection modules
+│   ├── modules/             # 64 vulnerability detection modules
 │   ├── ai/                  # 5-provider AI (Claude, GPT-4o, Gemini, Mistral, Ollama)
 │   ├── reporters/           # JSON, Markdown, PDF, SARIF, Burp XML, ZAP JSON
 │   ├── compliance/          # ISO 27001, HIPAA, GDPR, APPI control mapping
@@ -139,7 +139,7 @@ AI is used for:
 - **Narrative report** — produces human-readable Markdown summary
 - **Template selection** — narrows 7,400+ templates to 80–200 relevant for the detected stack
 
-Without an API key, all 61 modules still run and produce full findings — just no AI triage.
+Without an API key, all 64 modules still run and produce full findings — just no AI triage.
 
 ---
 
@@ -161,10 +161,13 @@ Without an API key, all 61 modules still run and produce full findings — just 
 
 | Job | Tool | What it checks |
 |---|---|---|
-| `test` | pytest | Unit tests on Python 3.12 and 3.13 |
-| `lint` | ruff | Code style in `scanner/` and `cli/` |
+| `test` | pytest + coverage | Unit tests on Python 3.12 and 3.13 (coverage floor 28%) |
+| `lint` | ruff | Pinned rule set (`E4, E7, E9, F`) on `scanner/`, `cli/`, `tests/unit/`, `examples/` |
 | `sast` | bandit | Medium+ severity issues (excludes `scanner/templates/`) |
 | `deps` | pip-audit | Known CVEs in dependencies |
+| `engine` | go | `go vet`, `go test -race`, build of the template engine |
+| `helm` | helm | `helm lint` and `helm template` of the chart |
+| `docker` | buildx | Builds the Docker image (no push) |
 
 All jobs require `permissions: contents: read` (set at workflow level in `ci.yml`).
 
