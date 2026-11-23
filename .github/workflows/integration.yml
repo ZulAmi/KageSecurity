@@ -32,6 +32,16 @@ jobs:
       - name: Start targets
         run: docker compose -f tests/integration/docker-compose.yml up -d --wait dvwa dvwa-db juice-shop clean-nginx
 
+      - name: Wait until every target answers HTTP
+        run: |
+          for url in http://localhost:4280/login.php http://localhost:3000/ http://localhost:8888/; do
+            for i in $(seq 1 60); do
+              curl -fsS -o /dev/null "$url" && { echo "ready: $url"; continue 2; }
+              sleep 3
+            done
+            echo "::error::$url did not become ready"; exit 1
+          done
+
       - name: Initialise DVWA database
         run: |
           curl -fsS -c /tmp/dvwa -b /tmp/dvwa http://localhost:4280/setup.php -o /tmp/setup.html

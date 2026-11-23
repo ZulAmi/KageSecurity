@@ -34,6 +34,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY --from=build /dist/ /tmp/dist/
 RUN set -eux; \
+    # Playwright's bundled Node driver needs libatomic before it can install anything
+    apt-get update; \
+    apt-get install -y --no-install-recommends libatomic1; \
     wheel="$(ls /tmp/dist/kagesec-*.whl)"; \
     pip install "${wheel}[all]"; \
     playwright install --with-deps chromium; \
