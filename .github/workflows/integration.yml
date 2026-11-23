@@ -26,8 +26,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install KageSec
-        run: pip install -e ".[dev]"
+      - name: Install KageSec (with the browser crawler, needed for Juice Shop)
+        run: |
+          pip install -e ".[dev,browser]"
+          python -m playwright install --with-deps chromium
 
       - name: Start targets
         run: docker compose -f tests/integration/docker-compose.yml up -d --wait dvwa dvwa-db juice-shop clean-nginx
@@ -41,13 +43,6 @@ jobs:
             done
             echo "::error::$url did not become ready"; exit 1
           done
-
-      - name: Initialise DVWA database
-        run: |
-          curl -fsS -c /tmp/dvwa -b /tmp/dvwa http://localhost:4280/setup.php -o /tmp/setup.html
-          token=$(grep -oP "user_token' value='\K[^']+" /tmp/setup.html || true)
-          curl -fsS -c /tmp/dvwa -b /tmp/dvwa -X POST http://localhost:4280/setup.php \
-            --data-urlencode "create_db=Create / Reset Database" --data-urlencode "user_token=${token}" -o /dev/null
 
       - name: Run integration tests
         run: pytest tests/integration/ -v --tb=short -p no:cacheprovider

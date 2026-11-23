@@ -1,9 +1,9 @@
 """
 Integration tests against DVWA (Damn Vulnerable Web Application).
 
-Requires: docker compose up -d dvwa dvwa-db
-          Wait ~30s for DVWA to initialise its DB, then run:
+Requires: docker compose -f tests/integration/docker-compose.yml up -d --wait dvwa dvwa-db
           pytest tests/integration/test_dvwa.py -v
+The fixture creates DVWA's database and logs in itself.
 
 These tests assert minimum true-positive counts (we MUST find what we claim to find)
 and a false-negative ceiling (we must not miss critical classes entirely).
@@ -25,12 +25,24 @@ EXPECTED_CATEGORIES = {
 }
 
 
+# Pages that would end the session or change the test setup if crawled or fuzzed:
+# logout ends the session, setup.php resets the DB, security.php changes the level.
+EXCLUDE = ["*logout*", "*setup.php*", "*security.php*"]
+
+# The modules this suite asserts on. The clean-nginx suite runs every module.
+MODULES = ["sqli", "xss", "csrf", "path_traversal", "cmd_injection", "security_headers"]
+
+
 @pytest.fixture(scope="module")
 def dvwa_scan():
     config = ScanConfig(
         target=DVWA_URL,
         max_depth=2,
         max_pages=30,
+        modules=MODULES,
+        exclude_patterns=EXCLUDE,
+        use_oob=False,
+        rate_limit_rps=50,     # local container
         auth={
             "type": "cookie",
             "cookies": {
@@ -44,21 +56,63 @@ def dvwa_scan():
 
 
 def _dvwa_session() -> str:
-    """Log in to DVWA and return the session cookie."""
+    """Create DVWA's database, log in as admin, and return an authenticated PHPSESSID.
+
+    DVWA sets its session cookie with ``Domain=localhost``, which Python's cookie jar
+    (used by httpx) files under ``.localhost`` but never sends back to ``localhost``.
+    So the session cookie is tracked by hand: read from Set-Cookie, sent as a Cookie
+    header, redirects followed manually (httpx would otherwise rebuild the header
+    from its jar). Fails loudly if login does not reach the logged-in home page —
+    otherwise the scan silently crawls nothing but the login form.
+    """
+    import re
+
     import httpx
-    client = httpx.Client(follow_redirects=True)
-    login = client.get(f"{DVWA_URL}/login.php")
-    token = _extract_csrf(login.text)
-    resp = client.post(f"{DVWA_URL}/login.php", data={
-        "username": "admin",
-        "password": "password",
-        "Login": "Login",
-        "user_token": token,
-    })
-    assert resp.status_code == 200, "DVWA login failed"
-    phpsessid = resp.cookies.get("PHPSESSID")
-    assert phpsessid, "No PHPSESSID cookie after login"
-    return phpsessid
+
+    diag: list[str] = []
+    session = {"PHPSESSID": ""}
+
+    def request(client, method, path, data=None):
+        url = path
+        for _ in range(5):  # follow redirects ourselves, keeping the session cookie
+            headers = {"Cookie": f"PHPSESSID={session['PHPSESSID']}; security=low"} if session["PHPSESSID"] else {}
+            resp = client.request(method, url, data=data, headers=headers)
+            for raw in resp.headers.get_list("set-cookie"):
+                m = re.match(r"\s*PHPSESSID=([^;]+)", raw)
+                if m:
+                    session["PHPSESSID"] = m.group(1)
+            diag.append(f"{method} {url}: {resp.status_code} → {resp.headers.get('location', '')}"
+                        f" | messages={_messages(resp.text)}")
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                return resp
+            url, method, data = resp.headers["location"], "GET", None
+        return resp
+
+    with httpx.Client(base_url=DVWA_URL + "/", follow_redirects=False, timeout=30) as client:
+        setup = request(client, "GET", "setup.php")
+        request(client, "POST", "setup.php", {
+            "create_db": "Create / Reset Database",
+            "user_token": _extract_csrf(setup.text),
+        })
+        login = request(client, "GET", "login.php")
+        request(client, "POST", "login.php", {
+            "username": "admin",
+            "password": "password",
+            "Login": "Login",
+            "user_token": _extract_csrf(login.text),
+        })
+        home = request(client, "GET", "index.php")
+
+    logged_in = home.status_code == 200 and "logout.php" in home.text
+    assert logged_in and session["PHPSESSID"], "DVWA login failed:\n" + "\n".join(diag)
+    return session["PHPSESSID"]
+
+
+def _messages(html: str) -> list[str]:
+    """DVWA's on-page status messages (login failures, setup results)."""
+    import re
+    found = re.findall(r'<div class=["\']message["\']>(.*?)</div>', html, re.S)
+    return [re.sub(r"<[^>]+>", " ", m).strip()[:200] for m in found]
 
 
 def _extract_csrf(html: str) -> str:
@@ -69,30 +123,40 @@ def _extract_csrf(html: str) -> str:
 
 # --- True-positive assertions ---
 
+def _titled(scan, *needles):
+    return [f for f in scan.findings if any(n in f.title.lower() for n in needles)]
+
+
+def test_session_was_authenticated(dvwa_scan):
+    urls = {f.url for f in dvwa_scan.findings}
+    assert dvwa_scan.pages_crawled > 3, f"Only {dvwa_scan.pages_crawled} page(s) crawled — session not authenticated?"
+    assert any("/vulnerabilities/" in u for u in urls), "No findings under /vulnerabilities/ — crawl never got past login"
+
+
 def test_sqli_detected(dvwa_scan):
-    sqli = [f for f in dvwa_scan.findings if "sql" in f.title.lower()]
+    sqli = [f for f in dvwa_scan.findings if f.title.lower().startswith("sql injection")]
     assert len(sqli) >= EXPECTED_CATEGORIES["sqli"]["min_findings"], (
         f"Expected at least {EXPECTED_CATEGORIES['sqli']['min_findings']} SQLi finding(s), got {len(sqli)}"
     )
 
 
 def test_xss_detected(dvwa_scan):
-    xss = [f for f in dvwa_scan.findings if "xss" in f.title.lower() or "cross-site" in f.title.lower()]
+    xss = _titled(dvwa_scan, "cross-site scripting", "xss")
     assert len(xss) >= EXPECTED_CATEGORIES["xss"]["min_findings"]
 
 
 def test_csrf_detected(dvwa_scan):
-    csrf = [f for f in dvwa_scan.findings if "csrf" in f.title.lower()]
+    csrf = _titled(dvwa_scan, "csrf", "cross-site request forgery")
     assert len(csrf) >= EXPECTED_CATEGORIES["csrf"]["min_findings"]
 
 
 def test_path_traversal_detected(dvwa_scan):
-    pt = [f for f in dvwa_scan.findings if "traversal" in f.title.lower() or "path" in f.title.lower()]
+    pt = _titled(dvwa_scan, "path traversal", "directory traversal", "file inclusion")
     assert len(pt) >= EXPECTED_CATEGORIES["path_traversal"]["min_findings"]
 
 
 def test_cmd_injection_detected(dvwa_scan):
-    cmd = [f for f in dvwa_scan.findings if "command" in f.title.lower() or "injection" in f.title.lower()]
+    cmd = _titled(dvwa_scan, "command injection")
     assert len(cmd) >= EXPECTED_CATEGORIES["cmd_injection"]["min_findings"]
 
 
